@@ -3,8 +3,10 @@ import * as ReactDOMClient from 'react-dom/client';
 
 // TODO channel.close();
 // TODO connection.close();
+// TODO Use rxjs to publish events for RTCConnection
 
 type SetupParameters = {
+    onConnectionEstablished: () => void;
     onIceCandidateGenerated: (candidate: RTCIceCandidate) => void;
     onIncomingMessage: (data: string) => void;
     outgoingChannelName: string;
@@ -20,6 +22,7 @@ function setupDuplexConnection(params: SetupParameters) {
     };
 
     connection.ondatachannel = (event) => {
+        params.onConnectionEstablished();
         const receiveChannel = event.channel;
         receiveChannel.onmessage = (event) => {
             params.onIncomingMessage(event.data);
@@ -54,12 +57,26 @@ type ConnectionData = {
 let connection: RTCPeerConnection;
 let sendChannel: RTCDataChannel;
 
+enum Phase {
+    selectMode = 'select-mode',
+    setupConnection = 'setup-connection',
+    connectionEstablished = 'connection-established',
+}
+
+enum Mode {
+    starter = 'starter',
+    joiner = 'joiner',
+}
+
 function App() {
-    const [candidate, setCandidate] = useState<RTCIceCandidate | undefined>(undefined);
-    const [mode, setMode] = useState<string>('');
-    const [sessionInit, setSessionInit] = useState<RTCSessionDescriptionInit | undefined>(
-        undefined,
-    );
+    const [mode, setMode] = useState<Mode>();
+    const [phase, setPhase] = useState<Phase>(Phase.selectMode);
+
+    const [candidate, setCandidate] = useState<RTCIceCandidate>();
+    const [sessionInit, setSessionInit] = useState<RTCSessionDescriptionInit>();
+
+    const [message, setMessage] = useState('');
+    const [chat, setChat] = useState<string[]>([]);
 
     const connectionData: ConnectionData = {
         candidate: candidate!,
@@ -68,13 +85,16 @@ function App() {
 
     async function start() {
         const setup = setupDuplexConnection({
+            onConnectionEstablished: () => {
+                setPhase(Phase.connectionEstablished);
+            },
             onIceCandidateGenerated: (candidate) => {
                 setCandidate(candidate);
             },
             onIncomingMessage: (data) => {
-                document.querySelector<HTMLTextAreaElement>('textarea#send-in')!.value = data;
+                setChat(chat.concat([`Them: ${data}`]));
             },
-            outgoingChannelName: 'callerToCallee',
+            outgoingChannelName: 'starterToJoiner',
         });
 
         ({ connection, sendChannel } = setup);
@@ -87,13 +107,16 @@ function App() {
 
     async function join() {
         const setup = setupDuplexConnection({
+            onConnectionEstablished: () => {
+                setPhase(Phase.connectionEstablished);
+            },
             onIceCandidateGenerated: (candidate) => {
                 setCandidate(candidate);
             },
             onIncomingMessage: (data) => {
-                document.querySelector<HTMLTextAreaElement>('textarea#send-in')!.value = data;
+                setChat(chat.concat([`Them: ${data}`]));
             },
-            outgoingChannelName: 'calleeToCaller',
+            outgoingChannelName: 'joinerToStarter',
         });
 
         ({ connection, sendChannel } = setup);
@@ -124,16 +147,30 @@ function App() {
 
     return (
         <div>
-            <p>
-                Mode:
-                <select onChange={(event) => setMode(event.target.value)} value={mode}>
-                    <option value="">-</option>
-                    <option value="caller">Caller</option>
-                    <option value="callee">Callee</option>
-                </select>
-            </p>
+            {phase === Phase.selectMode && (
+                <div>
+                    <button
+                        onClick={() => {
+                            setMode(Mode.starter);
+                            setPhase(Phase.setupConnection);
+                            start();
+                        }}
+                    >
+                        Start session
+                    </button>
+                    &emsp;
+                    <button
+                        onClick={() => {
+                            setMode(Mode.joiner);
+                            setPhase(Phase.setupConnection);
+                        }}
+                    >
+                        Join session
+                    </button>
+                </div>
+            )}
 
-            {mode === 'caller' && (
+            {phase === Phase.setupConnection && mode === Mode.starter && (
                 <div>
                     <h2>Caller</h2>
                     <button onClick={start}>Start</button>
@@ -145,7 +182,6 @@ function App() {
                         disabled
                         value={JSON.stringify(connectionData)}
                     ></textarea>
-                    <hr />
                     <p>Incoming connection</p>
                     <textarea rows={5} style={{ width: '100%' }} id="answer-in"></textarea>
                     <br />
@@ -154,14 +190,13 @@ function App() {
                 </div>
             )}
 
-            {mode === 'callee' && (
+            {phase === Phase.setupConnection && mode === Mode.joiner && (
                 <div>
                     <h2>Callee</h2>
                     <p>Incoming connection</p>
                     <textarea rows={5} style={{ width: '100%' }} id="offer-in"></textarea>
                     <br />
                     <button onClick={join}>Join</button>
-                    <hr />
                     <p>Outgoing connection</p>
                     <textarea
                         rows={5}
@@ -174,23 +209,30 @@ function App() {
                 </div>
             )}
 
-            {
+            {phase === Phase.connectionEstablished && (
                 <div>
                     <h2>Chat</h2>
-                    <textarea rows={5} style={{ width: '100%' }} id="send-in" disabled></textarea>
-                    <textarea rows={5} style={{ width: '100%' }} id="send-out"></textarea>
+                    {chat.map((message) => (
+                        <p>{message}</p>
+                    ))}
+                    <textarea
+                        rows={5}
+                        style={{ width: '100%' }}
+                        value={message}
+                        onChange={(event) => {
+                            setMessage(event.target.value);
+                        }}
+                    ></textarea>
                     <button
-                        onClick={() =>
-                            send(
-                                document.querySelector<HTMLTextAreaElement>('textarea#send-out')!
-                                    .value,
-                            )
-                        }
+                        onClick={() => {
+                            setChat(chat.concat([`You: ${message}`]));
+                            send(message);
+                        }}
                     >
                         Send
                     </button>
                 </div>
-            }
+            )}
         </div>
     );
 }
