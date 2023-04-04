@@ -1,61 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import * as ReactDOMClient from 'react-dom/client';
+import { Subject, Subscription } from 'rxjs';
+import { PeerConnection, PeerConnectionData } from './peer-connection';
 
 // TODO channel.close();
 // TODO connection.close();
-// TODO Use rxjs to publish events for RTCConnection
-
-type SetupParameters = {
-    onConnectionEstablished: () => void;
-    onIceCandidateGenerated: (candidate: RTCIceCandidate) => void;
-    onIncomingMessage: (data: string) => void;
-    outgoingChannelName: string;
-};
-
-function setupDuplexConnection(params: SetupParameters) {
-    const connection = new RTCPeerConnection();
-
-    connection.onicecandidate = (event) => {
-        if (event.candidate) {
-            params.onIceCandidateGenerated(event.candidate);
-        }
-    };
-
-    connection.ondatachannel = (event) => {
-        params.onConnectionEstablished();
-        const receiveChannel = event.channel;
-        receiveChannel.onmessage = (event) => {
-            params.onIncomingMessage(event.data);
-        };
-        // receiveChannel.onopen = () => {
-        //     console.log('Receiving channel opened');
-        // };
-        // receiveChannel.onclose = () => {
-        //     console.log('Receiving channel closed');
-        // };
-    };
-
-    const sendChannel = connection.createDataChannel(params.outgoingChannelName);
-    // sendChannel.onopen = () => {
-    //   console.log('Sending channel opened')
-    // };
-    // sendChannel.onclose = () => {
-    //   console.log('Sending channel closed')
-    // };
-
-    return {
-        connection,
-        sendChannel,
-    };
-}
-
-type ConnectionData = {
-    candidate: RTCIceCandidate;
-    sessionInit: RTCSessionDescriptionInit;
-};
-
-let connection: RTCPeerConnection;
-let sendChannel: RTCDataChannel;
 
 enum Phase {
     selectMode = 'select-mode',
@@ -71,78 +20,74 @@ enum Mode {
 function App() {
     const [mode, setMode] = useState<Mode>();
     const [phase, setPhase] = useState<Phase>(Phase.selectMode);
-
-    const [candidate, setCandidate] = useState<RTCIceCandidate>();
-    const [sessionInit, setSessionInit] = useState<RTCSessionDescriptionInit>();
+    const [peerConnection, setPeerConnection] = useState<PeerConnection>();
 
     const [message, setMessage] = useState('');
-    const [chat, setChat] = useState<string[]>([]);
+    const [conversation, setConversation] = useState<string[]>([]);
 
-    const connectionData: ConnectionData = {
-        candidate: candidate!,
-        sessionInit: sessionInit!,
-    };
+    const [, updateState] = useState({}); // Hack to trigger re-renders from RxJS subjects
+
+    const eventHandlers = useMemo(() => {
+        const handlers = {
+            onIceCandidate: new Subject<PeerConnectionData>(),
+            onDataChannelReady: new Subject<RTCDataChannel>(),
+            onMessageReceived: new Subject<string>(),
+        };
+
+        handlers.onIceCandidate.subscribe(() => updateState({}));
+        handlers.onDataChannelReady.subscribe(() => {
+            setPhase(Phase.connectionEstablished);
+        });
+        handlers.onMessageReceived.subscribe((data) =>
+            setConversation(conversation.concat([`Them: ${data}`])),
+        );
+
+        return handlers;
+    }, []);
+
+    const [messageReceivedSubscription, setMessageReceivedSubscription] = useState<Subscription>();
+    useEffect(() => {
+        if (messageReceivedSubscription) {
+            messageReceivedSubscription.unsubscribe();
+        }
+        if (peerConnection) {
+            const nextSubscription = peerConnection.onMessageReceived.subscribe((data) =>
+                setConversation(conversation.concat([`Them: ${data}`])),
+            );
+            setMessageReceivedSubscription(nextSubscription);
+        }
+    }, [conversation]);
 
     async function start() {
-        const setup = setupDuplexConnection({
-            onConnectionEstablished: () => {
-                setPhase(Phase.connectionEstablished);
-            },
-            onIceCandidateGenerated: (candidate) => {
-                setCandidate(candidate);
-            },
-            onIncomingMessage: (data) => {
-                setChat(chat.concat([`Them: ${data}`]));
-            },
-            outgoingChannelName: 'starterToJoiner',
-        });
+        const nextPeerConnection = new PeerConnection('starterToJoiner', eventHandlers);
 
-        ({ connection, sendChannel } = setup);
+        setPeerConnection(nextPeerConnection);
 
-        const offer = await connection.createOffer(); // This operation will generate many ice candidates
-        await connection.setLocalDescription(offer);
-
-        setSessionInit(offer);
+        await nextPeerConnection.generateOffer();
     }
 
     async function join() {
-        const setup = setupDuplexConnection({
-            onConnectionEstablished: () => {
-                setPhase(Phase.connectionEstablished);
-            },
-            onIceCandidateGenerated: (candidate) => {
-                setCandidate(candidate);
-            },
-            onIncomingMessage: (data) => {
-                setChat(chat.concat([`Them: ${data}`]));
-            },
-            outgoingChannelName: 'joinerToStarter',
-        });
+        const nextPeerConnection = new PeerConnection('joinerToStarter', eventHandlers);
 
-        ({ connection, sendChannel } = setup);
+        setPeerConnection(nextPeerConnection);
 
-        const connectionData: ConnectionData = JSON.parse(
+        const connectionData: PeerConnectionData = JSON.parse(
             document.querySelector<HTMLTextAreaElement>('textarea#offer-in')!.value,
         );
-        await connection.setRemoteDescription(connectionData.sessionInit);
-        await connection.addIceCandidate(connectionData.candidate);
+        await nextPeerConnection.setPeerData(connectionData);
 
-        const answer = await connection.createAnswer(); // This operation will generate many ice candidates
-        await connection.setLocalDescription(answer);
-
-        setSessionInit(answer);
+        await nextPeerConnection.generateAnswer();
     }
 
     async function accept() {
-        const connectionData: ConnectionData = JSON.parse(
+        const connectionData: PeerConnectionData = JSON.parse(
             document.querySelector<HTMLTextAreaElement>('textarea#answer-in')!.value,
         );
-        await connection.setRemoteDescription(connectionData.sessionInit);
-        await connection.addIceCandidate(connectionData.candidate);
+        await peerConnection?.setPeerData(connectionData);
     }
 
     async function send(payload: string) {
-        await sendChannel.send(payload);
+        await peerConnection?.send(payload);
     }
 
     return (
@@ -180,7 +125,9 @@ function App() {
                         style={{ width: '100%' }}
                         id="offer-out"
                         disabled
-                        value={JSON.stringify(connectionData)}
+                        value={
+                            (peerConnection && JSON.stringify(peerConnection.connectionData)) || ''
+                        }
                     ></textarea>
                     <p>Incoming connection</p>
                     <textarea rows={5} style={{ width: '100%' }} id="answer-in"></textarea>
@@ -203,7 +150,9 @@ function App() {
                         style={{ width: '100%' }}
                         id="answer-out"
                         disabled
-                        value={JSON.stringify(connectionData)}
+                        value={
+                            (peerConnection && JSON.stringify(peerConnection.connectionData)) || ''
+                        }
                     ></textarea>
                     <br />
                 </div>
@@ -212,8 +161,8 @@ function App() {
             {phase === Phase.connectionEstablished && (
                 <div>
                     <h2>Chat</h2>
-                    {chat.map((message) => (
-                        <p>{message}</p>
+                    {conversation.map((message, index) => (
+                        <p key={`message-${index}`}>{message}</p>
                     ))}
                     <textarea
                         rows={5}
@@ -225,7 +174,8 @@ function App() {
                     ></textarea>
                     <button
                         onClick={() => {
-                            setChat(chat.concat([`You: ${message}`]));
+                            setConversation(conversation.concat([`You: ${message}`]));
+                            setMessage('');
                             send(message);
                         }}
                     >
