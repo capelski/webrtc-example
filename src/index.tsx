@@ -121,32 +121,20 @@ function App() {
         updateEventsAndRTCHandlers([]);
     }, [rtcWrapper]);
 
-    const isNewStatus =
-        rtcWrapper.connection.connectionState === 'new' &&
-        rtcWrapper.connection.signalingState === 'stable';
-    const hasRemoteOffer =
-        rtcWrapper.connection.connectionState === 'new' &&
-        rtcWrapper.connection.signalingState === 'have-remote-offer';
-    const awaitingRemoteAnswer =
-        rtcWrapper.connection.connectionState === 'connecting' &&
-        rtcWrapper.connection.signalingState === 'have-local-offer';
-    const isConnectedStatus = rtcWrapper.connection.connectionState === 'connected';
-    const isClosedStatus =
-        rtcWrapper.connection.connectionState === 'closed' &&
-        rtcWrapper.connection.signalingState === 'closed';
-
-    const disableConnectionMode = !isNewStatus;
-    const disableGenerateOffer = connectionMode !== ConnectionMode.offer || !isNewStatus;
-    const disableGenerateAnswer = connectionMode !== ConnectionMode.answer || !hasRemoteOffer;
-    const disableCreateSendChannel = connectionMode === ConnectionMode.offer || !hasRemoteOffer;
+    const disableConnectionMode = !rtcWrapper.isNewStatus;
+    const disableGenerateOffer = connectionMode !== ConnectionMode.offer || !rtcWrapper.isNewStatus;
+    const disableGenerateAnswer =
+        connectionMode !== ConnectionMode.answer || !rtcWrapper.hasRemoteOffer;
+    const disableCreateSendChannel =
+        connectionMode === ConnectionMode.offer || !rtcWrapper.hasRemoteOffer;
     const disableSetRemoteData = !(
-        (connectionMode === ConnectionMode.offer && awaitingRemoteAnswer) ||
-        (connectionMode === ConnectionMode.answer && isNewStatus)
+        (connectionMode === ConnectionMode.offer && rtcWrapper.awaitingRemoteAnswer) ||
+        (connectionMode === ConnectionMode.answer && rtcWrapper.isNewStatus)
     );
-    const disableCloseConnection = !isConnectedStatus;
-    const disableSend = !isConnectedStatus || !rtcWrapper.sendChannel;
-    const disableCloseReceive = !isConnectedStatus || !rtcWrapper.receiveChannel;
-    const disableReset = !isClosedStatus;
+    const disableCloseConnection = !rtcWrapper.isConnectedStatus;
+    const disableSend = !rtcWrapper.isConnectedStatus || !rtcWrapper.sendChannel;
+    const disableCloseReceive = !rtcWrapper.isConnectedStatus || !rtcWrapper.receiveChannel;
+    const disableReset = !rtcWrapper.isClosedStatus;
 
     return (
         <div>

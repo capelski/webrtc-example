@@ -98,6 +98,37 @@ export class RTCWrapper {
         };
     }
 
+    get isNewStatus() {
+        return (
+            this.connection.connectionState === 'new' && this.connection.signalingState === 'stable'
+        );
+    }
+
+    get hasRemoteOffer() {
+        return (
+            this.connection.connectionState === 'new' &&
+            this.connection.signalingState === 'have-remote-offer'
+        );
+    }
+
+    get awaitingRemoteAnswer() {
+        return (
+            this.connection.connectionState === 'connecting' &&
+            this.connection.signalingState === 'have-local-offer'
+        );
+    }
+
+    get isConnectedStatus() {
+        return this.connection.connectionState === 'connected';
+    }
+
+    get isClosedStatus() {
+        return (
+            this.connection.connectionState === 'closed' &&
+            this.connection.signalingState === 'closed'
+        );
+    }
+
     createSendChannel(name: string) {
         // If a send channel is needed, it must be created before offering/answering a session
         this.sendChannel = this.connection.createDataChannel(name);
