@@ -1,188 +1,318 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import * as ReactDOMClient from 'react-dom/client';
-import { Subject, Subscription } from 'rxjs';
-import { PeerConnection, PeerConnectionData } from './peer-connection';
+import { RTCWrapper, RTCWrapperHandlers } from './rtc-wrapper';
 
-// TODO channel.close();
-// TODO connection.close();
-
-enum Phase {
-    selectMode = 'select-mode',
-    setupConnection = 'setup-connection',
-    connectionEstablished = 'connection-established',
-}
-
-enum Mode {
-    starter = 'starter',
-    joiner = 'joiner',
+enum ConnectionMode {
+    offer = 'offer',
+    answer = 'answer',
 }
 
 function App() {
-    const [mode, setMode] = useState<Mode>();
-    const [phase, setPhase] = useState<Phase>(Phase.selectMode);
-    const [peerConnection, setPeerConnection] = useState<PeerConnection>();
+    const [connectionMode, setConnectionMode] = useState<ConnectionMode>(ConnectionMode.offer);
+    const [rtcWrapper, setRtcWrapper] = useState<RTCWrapper>(new RTCWrapper());
+    const [createSendChannel, setCreateSendChannel] = useState(true);
+    const [connectionEvents, setConnectionEvents] = useState<string[]>([]);
 
+    const [remoteSessionInit, setRemoteSessionInit] = useState('');
+    const [remoteIceCandidate, setRemoteIceCandidate] = useState('');
     const [message, setMessage] = useState('');
-    const [conversation, setConversation] = useState<string[]>([]);
 
-    const [, updateState] = useState({}); // Hack to trigger re-renders from RxJS subjects
+    function updateEventsAndRTCHandlers(
+        currentConnectionEvents: string[],
+        newConnectionEvents: string[] = [],
+    ) {
+        const nextConnectionEvents = newConnectionEvents
+            .map((event) => `${new Date().toISOString().substring(11, 23)} ${event}`)
+            .concat(currentConnectionEvents);
+        setConnectionEvents(nextConnectionEvents);
 
-    const eventHandlers = useMemo(() => {
-        const handlers = {
-            onIceCandidate: new Subject<PeerConnectionData>(),
-            onDataChannelReady: new Subject<RTCDataChannel>(),
-            onMessageReceived: new Subject<string>(),
+        const handlers: RTCWrapperHandlers = {
+            onAnswerCreated: (event) => {
+                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                    `Answer created: ${event.detail.sdp?.substring(0, 15)}...`,
+                ]);
+            },
+            onConnectionStateChange: (event) => {
+                const newEvents = [`Connection state change: ${event.detail}`];
+                if (event.detail === 'disconnected') {
+                    // Connection was closed by the remote peer; the app state must be updated on this peer
+                    rtcWrapper.closeConnection();
+                    newEvents.push('Connection closed by remote peer');
+                }
+                updateEventsAndRTCHandlers(nextConnectionEvents, newEvents);
+            },
+            onIceCandidate: (event) => {
+                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                    `ICE candidate generated: ${event.detail.address}`,
+                ]);
+            },
+            onMessageReceived: (event) => {
+                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                    `Message received: ${event.detail}`,
+                ]);
+            },
+            onOfferCreated: (event) => {
+                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                    `Offer created: ${event.detail.sdp?.substring(0, 15)}...`,
+                ]);
+            },
+            onReceiveChannelClosed: () => {
+                updateEventsAndRTCHandlers(nextConnectionEvents, ['Receiving channel closed']);
+            },
+            onReceiveChannelOpened: (event) => {
+                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                    `Receiving channel opened: ${event.detail.label}`,
+                ]);
+            },
+            onSendChannelClosed: () => {
+                updateEventsAndRTCHandlers(nextConnectionEvents, ['Sending channel closed']);
+            },
+            onSendChannelOpened: (event) => {
+                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                    `Sending channel opened: ${event.detail.label}`,
+                ]);
+            },
+            onSignalingStateChange: (event) => {
+                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                    `Signaling state change: ${event.detail}`,
+                ]);
+            },
         };
 
-        handlers.onIceCandidate.subscribe(() => updateState({}));
-        handlers.onDataChannelReady.subscribe(() => {
-            setPhase(Phase.connectionEstablished);
-        });
-        handlers.onMessageReceived.subscribe((data) =>
-            setConversation(conversation.concat([`Them: ${data}`])),
+        rtcWrapper.setEventHandlers(handlers);
+    }
+
+    function connectionModeChange(event: React.ChangeEvent<HTMLInputElement>) {
+        const nextConnectionMode = event.target.value as ConnectionMode;
+        setConnectionMode(nextConnectionMode);
+        if (nextConnectionMode === ConnectionMode.offer) {
+            setCreateSendChannel(true);
+        }
+    }
+
+    function reset() {
+        setConnectionEvents([]);
+        setMessage('');
+        setRemoteIceCandidate('');
+        setRemoteSessionInit('');
+        setRtcWrapper(new RTCWrapper());
+    }
+
+    async function generateOffer() {
+        rtcWrapper.createSendChannel('offerToAnswer');
+        await rtcWrapper.setOffer();
+    }
+
+    async function generateAnswer() {
+        if (createSendChannel) {
+            rtcWrapper.createSendChannel('answerToOffer');
+        }
+        await rtcWrapper.setAnswer();
+    }
+
+    async function setRemoteData() {
+        await rtcWrapper.setRemoteData(
+            JSON.parse(remoteSessionInit || '{}'),
+            JSON.parse(remoteIceCandidate || '{}'),
         );
+    }
 
-        return handlers;
-    }, []);
-
-    const [messageReceivedSubscription, setMessageReceivedSubscription] = useState<Subscription>();
     useEffect(() => {
-        if (messageReceivedSubscription) {
-            messageReceivedSubscription.unsubscribe();
-        }
-        if (peerConnection) {
-            const nextSubscription = peerConnection.onMessageReceived.subscribe((data) =>
-                setConversation(conversation.concat([`Them: ${data}`])),
-            );
-            setMessageReceivedSubscription(nextSubscription);
-        }
-    }, [conversation]);
+        updateEventsAndRTCHandlers([]);
+    }, [rtcWrapper]);
 
-    async function start() {
-        const nextPeerConnection = new PeerConnection('starterToJoiner', eventHandlers);
+    const isNewStatus =
+        rtcWrapper.connection.connectionState === 'new' &&
+        rtcWrapper.connection.signalingState === 'stable';
+    const hasRemoteOffer =
+        rtcWrapper.connection.connectionState === 'new' &&
+        rtcWrapper.connection.signalingState === 'have-remote-offer';
+    const awaitingRemoteAnswer =
+        rtcWrapper.connection.connectionState === 'connecting' &&
+        rtcWrapper.connection.signalingState === 'have-local-offer';
+    const isConnectedStatus = rtcWrapper.connection.connectionState === 'connected';
+    const isClosedStatus =
+        rtcWrapper.connection.connectionState === 'closed' &&
+        rtcWrapper.connection.signalingState === 'closed';
 
-        setPeerConnection(nextPeerConnection);
-
-        await nextPeerConnection.generateOffer();
-    }
-
-    async function join() {
-        const nextPeerConnection = new PeerConnection('joinerToStarter', eventHandlers);
-
-        setPeerConnection(nextPeerConnection);
-
-        const connectionData: PeerConnectionData = JSON.parse(
-            document.querySelector<HTMLTextAreaElement>('textarea#offer-in')!.value,
-        );
-        await nextPeerConnection.setPeerData(connectionData);
-
-        await nextPeerConnection.generateAnswer();
-    }
-
-    async function accept() {
-        const connectionData: PeerConnectionData = JSON.parse(
-            document.querySelector<HTMLTextAreaElement>('textarea#answer-in')!.value,
-        );
-        await peerConnection?.setPeerData(connectionData);
-    }
-
-    async function send(payload: string) {
-        await peerConnection?.send(payload);
-    }
+    const disableConnectionMode = !isNewStatus;
+    const disableGenerateOffer = connectionMode !== ConnectionMode.offer || !isNewStatus;
+    const disableGenerateAnswer = connectionMode !== ConnectionMode.answer || !hasRemoteOffer;
+    const disableCreateSendChannel = connectionMode === ConnectionMode.offer || !hasRemoteOffer;
+    const disableSetRemoteData = !(
+        (connectionMode === ConnectionMode.offer && awaitingRemoteAnswer) ||
+        (connectionMode === ConnectionMode.answer && isNewStatus)
+    );
+    const disableCloseConnection = !isConnectedStatus;
+    const disableSend = !isConnectedStatus || !rtcWrapper.sendChannel;
+    const disableCloseReceive = !isConnectedStatus || !rtcWrapper.receiveChannel;
+    const disableReset = !isClosedStatus;
 
     return (
         <div>
-            {phase === Phase.selectMode && (
+            <div>
+                <h2>Setup</h2>
+                <p>
+                    Connection status: {rtcWrapper.connection.connectionState} /{' '}
+                    {rtcWrapper.connection.signalingState}
+                </p>
+
+                <p>
+                    Peer:{' '}
+                    <input
+                        type="radio"
+                        name="connection-mode"
+                        value={ConnectionMode.offer}
+                        checked={connectionMode === ConnectionMode.offer}
+                        onChange={connectionModeChange}
+                        disabled={disableConnectionMode}
+                    />
+                    Offer
+                    <input
+                        type="radio"
+                        name="connection-mode"
+                        value={ConnectionMode.answer}
+                        checked={connectionMode === ConnectionMode.answer}
+                        onChange={connectionModeChange}
+                        disabled={disableConnectionMode}
+                    />
+                    Answer
+                </p>
+
                 <div>
-                    <button
-                        onClick={() => {
-                            setMode(Mode.starter);
-                            setPhase(Phase.setupConnection);
-                            start();
-                        }}
-                    >
-                        Start session
+                    <span>Local session</span>
+                    <br />
+                    <textarea
+                        rows={5}
+                        style={{ width: '100%' }}
+                        disabled
+                        value={rtcWrapper.sessionInit ? JSON.stringify(rtcWrapper.sessionInit) : ''}
+                    ></textarea>
+                    <span>Local ICE Candidate</span>
+                    <br />
+                    <textarea
+                        rows={2}
+                        style={{ width: '100%' }}
+                        disabled
+                        value={
+                            rtcWrapper.iceCandidate ? JSON.stringify(rtcWrapper.iceCandidate) : ''
+                        }
+                    ></textarea>
+                    <br />
+                    <button onClick={generateOffer} disabled={disableGenerateOffer}>
+                        Generate offer
                     </button>
                     &emsp;
-                    <button
-                        onClick={() => {
-                            setMode(Mode.joiner);
-                            setPhase(Phase.setupConnection);
-                        }}
-                    >
-                        Join session
+                    <button onClick={generateAnswer} disabled={disableGenerateAnswer}>
+                        Generate answer
                     </button>
-                </div>
-            )}
-
-            {phase === Phase.setupConnection && mode === Mode.starter && (
-                <div>
-                    <h2>Caller</h2>
-                    <button onClick={start}>Start</button>
-                    <p>Outgoing connection</p>
+                    &emsp;
+                    <input
+                        type="checkbox"
+                        checked={createSendChannel}
+                        onChange={() => {
+                            setCreateSendChannel(!createSendChannel);
+                        }}
+                        disabled={disableCreateSendChannel}
+                    />
+                    Create send channel
+                    <br />
+                    <br />
+                    <span>Remote session</span>
+                    <br />
                     <textarea
                         rows={5}
                         style={{ width: '100%' }}
-                        id="offer-out"
-                        disabled
-                        value={
-                            (peerConnection && JSON.stringify(peerConnection.connectionData)) || ''
-                        }
-                    ></textarea>
-                    <p>Incoming connection</p>
-                    <textarea rows={5} style={{ width: '100%' }} id="answer-in"></textarea>
-                    <br />
-                    <button onClick={accept}>Accept</button>
-                    <br />
-                </div>
-            )}
-
-            {phase === Phase.setupConnection && mode === Mode.joiner && (
-                <div>
-                    <h2>Callee</h2>
-                    <p>Incoming connection</p>
-                    <textarea rows={5} style={{ width: '100%' }} id="offer-in"></textarea>
-                    <br />
-                    <button onClick={join}>Join</button>
-                    <p>Outgoing connection</p>
-                    <textarea
-                        rows={5}
-                        style={{ width: '100%' }}
-                        id="answer-out"
-                        disabled
-                        value={
-                            (peerConnection && JSON.stringify(peerConnection.connectionData)) || ''
-                        }
-                    ></textarea>
-                    <br />
-                </div>
-            )}
-
-            {phase === Phase.connectionEstablished && (
-                <div>
-                    <h2>Chat</h2>
-                    {conversation.map((message, index) => (
-                        <p key={`message-${index}`}>{message}</p>
-                    ))}
-                    <textarea
-                        rows={5}
-                        style={{ width: '100%' }}
-                        value={message}
+                        disabled={disableSetRemoteData}
+                        value={remoteSessionInit}
                         onChange={(event) => {
-                            setMessage(event.target.value);
+                            setRemoteSessionInit(event.target.value);
                         }}
                     ></textarea>
-                    <button
-                        onClick={() => {
-                            setConversation(conversation.concat([`You: ${message}`]));
-                            setMessage('');
-                            send(message);
+                    <span>Remote ICE Candidate</span>
+                    <br />
+                    <textarea
+                        rows={2}
+                        style={{ width: '100%' }}
+                        disabled={disableSetRemoteData}
+                        value={remoteIceCandidate}
+                        onChange={(event) => {
+                            setRemoteIceCandidate(event.target.value);
                         }}
-                    >
-                        Send
-                    </button>
+                    ></textarea>
+                    <br />
+                    {
+                        <button onClick={setRemoteData} disabled={disableSetRemoteData}>
+                            Set remote data
+                        </button>
+                    }
                 </div>
-            )}
+            </div>
+
+            <div>
+                <h2>Messages</h2>
+                <textarea
+                    rows={5}
+                    style={{ width: '100%' }}
+                    value={message}
+                    onChange={(event) => {
+                        setMessage(event.target.value);
+                    }}
+                    disabled={disableSend}
+                ></textarea>
+                <button
+                    onClick={() => {
+                        rtcWrapper.sendChannel!.send(message);
+                        setMessage('');
+
+                        updateEventsAndRTCHandlers(connectionEvents, [`Message sent: ${message}`]);
+                    }}
+                    disabled={disableSend}
+                >
+                    Send
+                </button>
+                &emsp;
+                <button
+                    onClick={() => {
+                        rtcWrapper.sendChannel!.close();
+                    }}
+                    disabled={disableSend}
+                >
+                    Close sending channel
+                </button>
+                &emsp;
+                <button
+                    onClick={() => {
+                        rtcWrapper.receiveChannel!.close();
+                    }}
+                    disabled={disableCloseReceive}
+                >
+                    Close receiving channel
+                </button>
+                &emsp;
+                <button
+                    onClick={() => {
+                        rtcWrapper.closeConnection();
+                        updateEventsAndRTCHandlers(connectionEvents, [
+                            'Connection closed by local peer',
+                        ]);
+                    }}
+                    disabled={disableCloseConnection}
+                >
+                    Close connection
+                </button>
+                &emsp;
+                <button onClick={reset} disabled={disableReset}>
+                    Reset
+                </button>
+            </div>
+
+            <div>
+                <h2>Events</h2>
+                {connectionEvents.map((message, index) => (
+                    <p key={`event-${index}`}>- {message}</p>
+                ))}
+            </div>
         </div>
     );
 }
