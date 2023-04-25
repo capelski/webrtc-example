@@ -141,6 +141,10 @@ export class RTCWrapper {
             throw new Error("The RTC connection hasn't been initialized");
         }
 
+        if (this.sendChannel) {
+            this.sendChannel.close();
+        }
+
         // If a send channel is needed, it must be created before offering/answering a session
         this.sendChannel = this.connection.createDataChannel(name);
         this.sendChannel.onopen = () => {

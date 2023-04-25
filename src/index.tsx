@@ -156,11 +156,10 @@ function App() {
     }, [rtcWrapper]);
 
     const disableInitialize = !!rtcWrapper.ref.connection;
+    const disableCreateOffer = !rtcWrapper.ref.isNewStatus;
+    const disableCreateAnswer = !rtcWrapper.ref.hasRemoteOffer;
     const disableCreateSendChannel =
-        !!rtcWrapper.ref.sessionInit ||
-        (!rtcWrapper.ref.isNewStatus && !rtcWrapper.ref.hasRemoteOffer);
-    const disableGenerateOffer = !!rtcWrapper.ref.sessionInit || !rtcWrapper.ref.isNewStatus;
-    const disableGenerateAnswer = !!rtcWrapper.ref.sessionInit || !rtcWrapper.ref.hasRemoteOffer;
+        !!rtcWrapper.ref.sessionInit || (disableCreateOffer && disableCreateAnswer);
     const disableSetLocalDescription =
         !rtcWrapper.ref.sessionInit ||
         (!rtcWrapper.ref.isNewStatus && !rtcWrapper.ref.hasRemoteOffer);
@@ -223,11 +222,11 @@ function App() {
                         disabled={disableCreateSendChannel}
                     />
                     Create send channel&emsp;
-                    <button onClick={createOffer} disabled={disableGenerateOffer}>
+                    <button onClick={createOffer} disabled={disableCreateOffer}>
                         Create offer
                     </button>
                     &emsp;
-                    <button onClick={createAnswer} disabled={disableGenerateAnswer}>
+                    <button onClick={createAnswer} disabled={disableCreateAnswer}>
                         Create answer
                     </button>
                     &emsp;
