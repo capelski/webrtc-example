@@ -2,8 +2,10 @@ import React, { useEffect, useState } from 'react';
 import * as ReactDOMClient from 'react-dom/client';
 import { RTCWrapper, RTCWrapperHandlers } from './rtc-wrapper';
 
+// TODO Store and retrieve all ICE Candidates
 // TODO Option to remove logic checks
 // TODO Remove Offer/Answer radio buttons
+// Differentiate native events vs pseudo events
 
 enum ConnectionMode {
     offer = 'offer',
@@ -12,7 +14,7 @@ enum ConnectionMode {
 
 function App() {
     const [connectionMode, setConnectionMode] = useState<ConnectionMode>(ConnectionMode.offer);
-    const [rtcWrapper, setRtcWrapper] = useState<RTCWrapper>(new RTCWrapper());
+    const [rtcWrapper, setRtcWrapper] = useState<{ ref: RTCWrapper }>({ ref: new RTCWrapper() });
     const [createSendChannel, setCreateSendChannel] = useState(true);
     const [connectionEvents, setConnectionEvents] = useState<string[]>([]);
 
@@ -39,7 +41,7 @@ function App() {
                 const newEvents = [`Connection state change: ${event.detail}`];
                 if (event.detail === 'disconnected') {
                     // Connection was closed by the remote peer; the app state must be updated on this peer
-                    rtcWrapper.closeConnection();
+                    rtcWrapper.ref.closeConnection();
                     newEvents.push('Connection closed by remote peer');
                 }
                 updateEventsAndRTCHandlers(nextConnectionEvents, newEvents);
@@ -82,7 +84,12 @@ function App() {
             },
         };
 
-        rtcWrapper.setEventHandlers(handlers);
+        rtcWrapper.ref.setEventHandlers(handlers);
+    }
+
+    function initialize() {
+        rtcWrapper.ref.initialize();
+        setRtcWrapper({ ref: rtcWrapper.ref });
     }
 
     function connectionModeChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -93,78 +100,87 @@ function App() {
         }
     }
 
-    function reset() {
-        setConnectionEvents([]);
-        setMessage('');
-        setRemoteIceCandidate('');
-        setRemoteSessionInit('');
-        setRtcWrapper(new RTCWrapper());
-    }
-
     async function createOffer() {
-        rtcWrapper.createSendChannel('offerToAnswer');
-        await rtcWrapper.createOffer();
+        rtcWrapper.ref.createSendChannel('offerToAnswer');
+        await rtcWrapper.ref.createOffer();
     }
 
     async function createAnswer() {
         if (createSendChannel) {
-            rtcWrapper.createSendChannel('answerToOffer');
+            rtcWrapper.ref.createSendChannel('answerToOffer');
         }
-        await rtcWrapper.createAnswer();
+        await rtcWrapper.ref.createAnswer();
     }
 
     function setLocalDescription() {
-        rtcWrapper.setLocalDescription();
+        rtcWrapper.ref.setLocalDescription();
     }
 
     async function setRemoteData() {
-        await rtcWrapper.setRemoteData(
+        await rtcWrapper.ref.setRemoteData(
             JSON.parse(remoteSessionInit || '{}'),
             JSON.parse(remoteIceCandidate || '{}'),
         );
+    }
+
+    function clear() {
+        rtcWrapper.ref.clear();
+
+        setConnectionEvents([]);
+        setMessage('');
+        setRemoteIceCandidate('');
+        setRemoteSessionInit('');
+        setRtcWrapper({ ref: rtcWrapper.ref });
     }
 
     useEffect(() => {
         updateEventsAndRTCHandlers([]);
     }, [rtcWrapper]);
 
-    const disableConnectionMode = !rtcWrapper.isNewStatus;
+    const disableInitialize = !!rtcWrapper.ref.connection;
+    const disableConnectionMode = !rtcWrapper.ref.isNewStatus;
     const disableGenerateOffer =
         connectionMode !== ConnectionMode.offer ||
-        !rtcWrapper.isNewStatus ||
-        !!rtcWrapper.sessionInit;
+        !rtcWrapper.ref.isNewStatus ||
+        !!rtcWrapper.ref.sessionInit;
     const disableSetLocalDescription = !(
         (connectionMode === ConnectionMode.offer &&
-            rtcWrapper.isNewStatus &&
-            !!rtcWrapper.sessionInit) ||
+            rtcWrapper.ref.isNewStatus &&
+            !!rtcWrapper.ref.sessionInit) ||
         (connectionMode === ConnectionMode.answer &&
-            rtcWrapper.hasRemoteOffer &&
-            !!rtcWrapper.sessionInit)
+            rtcWrapper.ref.hasRemoteOffer &&
+            !!rtcWrapper.ref.sessionInit)
     );
     const disableGenerateAnswer =
         connectionMode !== ConnectionMode.answer ||
-        !rtcWrapper.hasRemoteOffer ||
-        !!rtcWrapper.sessionInit;
+        !rtcWrapper.ref.hasRemoteOffer ||
+        !!rtcWrapper.ref.sessionInit;
     const disableCreateSendChannel =
         connectionMode === ConnectionMode.offer ||
-        !rtcWrapper.hasRemoteOffer ||
-        !!rtcWrapper.sessionInit;
+        !rtcWrapper.ref.hasRemoteOffer ||
+        !!rtcWrapper.ref.sessionInit;
     const disableSetRemoteData = !(
-        (connectionMode === ConnectionMode.offer && rtcWrapper.awaitingRemoteAnswer) ||
-        (connectionMode === ConnectionMode.answer && rtcWrapper.isNewStatus)
+        (connectionMode === ConnectionMode.offer && rtcWrapper.ref.awaitingRemoteAnswer) ||
+        (connectionMode === ConnectionMode.answer && rtcWrapper.ref.isNewStatus)
     );
-    const disableCloseConnection = !rtcWrapper.isConnectedStatus;
-    const disableSend = !rtcWrapper.isConnectedStatus || !rtcWrapper.sendChannel;
-    const disableCloseReceive = !rtcWrapper.isConnectedStatus || !rtcWrapper.receiveChannel;
-    const disableReset = !rtcWrapper.isClosedStatus;
+    const disableCloseConnection = !rtcWrapper.ref.isConnectedStatus;
+    const disableSend = !rtcWrapper.ref.isConnectedStatus || !rtcWrapper.ref.sendChannel;
+    const disableCloseReceive = !rtcWrapper.ref.isConnectedStatus || !rtcWrapper.ref.receiveChannel;
+    const disableClear = !rtcWrapper.ref.isClosedStatus;
 
     return (
         <div>
             <div>
                 <h2>Setup</h2>
                 <p>
-                    Connection status: {rtcWrapper.connection.connectionState} /{' '}
-                    {rtcWrapper.connection.signalingState}
+                    Connection status: {rtcWrapper.ref.connection?.connectionState || '-'} /{' '}
+                    {rtcWrapper.ref.connection?.signalingState || '-'}
+                </p>
+
+                <p>
+                    <button onClick={initialize} disabled={disableInitialize}>
+                        Initialize
+                    </button>
                 </p>
 
                 <p>
@@ -196,7 +212,11 @@ function App() {
                         rows={5}
                         style={{ width: '100%' }}
                         disabled
-                        value={rtcWrapper.sessionInit ? JSON.stringify(rtcWrapper.sessionInit) : ''}
+                        value={
+                            rtcWrapper.ref.sessionInit
+                                ? JSON.stringify(rtcWrapper.ref.sessionInit)
+                                : ''
+                        }
                     ></textarea>
                     <span>Local ICE Candidate</span>
                     <br />
@@ -205,7 +225,9 @@ function App() {
                         style={{ width: '100%' }}
                         disabled
                         value={
-                            rtcWrapper.iceCandidate ? JSON.stringify(rtcWrapper.iceCandidate) : ''
+                            rtcWrapper.ref.iceCandidate
+                                ? JSON.stringify(rtcWrapper.ref.iceCandidate)
+                                : ''
                         }
                     ></textarea>
                     <br />
@@ -276,7 +298,7 @@ function App() {
                 ></textarea>
                 <button
                     onClick={() => {
-                        rtcWrapper.sendChannel!.send(message);
+                        rtcWrapper.ref.sendChannel!.send(message);
                         setMessage('');
 
                         updateEventsAndRTCHandlers(connectionEvents, [`Message sent: ${message}`]);
@@ -288,7 +310,7 @@ function App() {
                 &emsp;
                 <button
                     onClick={() => {
-                        rtcWrapper.sendChannel!.close();
+                        rtcWrapper.ref.sendChannel!.close();
                     }}
                     disabled={disableSend}
                 >
@@ -297,7 +319,7 @@ function App() {
                 &emsp;
                 <button
                     onClick={() => {
-                        rtcWrapper.receiveChannel!.close();
+                        rtcWrapper.ref.receiveChannel!.close();
                     }}
                     disabled={disableCloseReceive}
                 >
@@ -306,7 +328,7 @@ function App() {
                 &emsp;
                 <button
                     onClick={() => {
-                        rtcWrapper.closeConnection();
+                        rtcWrapper.ref.closeConnection();
                         updateEventsAndRTCHandlers(connectionEvents, [
                             'Connection closed by local peer',
                         ]);
@@ -316,8 +338,8 @@ function App() {
                     Close connection
                 </button>
                 &emsp;
-                <button onClick={reset} disabled={disableReset}>
-                    Reset
+                <button onClick={clear} disabled={disableClear}>
+                    Clear
                 </button>
             </div>
 

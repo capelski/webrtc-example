@@ -26,7 +26,7 @@ export type RTCWrapperHandlers = {
 };
 
 export class RTCWrapper {
-    public readonly connection: RTCPeerConnection;
+    public connection?: RTCPeerConnection;
     public readonly events: EventTarget;
     protected handlers?: Partial<RTCWrapperHandlers>;
 
@@ -37,13 +37,15 @@ export class RTCWrapper {
 
     constructor() {
         this.events = new EventTarget();
+    }
 
+    initialize() {
         this.connection = new RTCPeerConnection();
 
         this.connection.onconnectionstatechange = () => {
             this.events.dispatchEvent(
                 new CustomEvent(RTCWrapperEvents.connectionStateChange, {
-                    detail: this.connection.connectionState,
+                    detail: this.connection!.connectionState,
                 }),
             );
         };
@@ -51,7 +53,7 @@ export class RTCWrapper {
         this.connection.onsignalingstatechange = () => {
             this.events.dispatchEvent(
                 new CustomEvent(RTCWrapperEvents.signalingStateChange, {
-                    detail: this.connection.signalingState,
+                    detail: this.connection!.signalingState,
                 }),
             );
         };
@@ -100,12 +102,15 @@ export class RTCWrapper {
 
     get isNewStatus() {
         return (
-            this.connection.connectionState === 'new' && this.connection.signalingState === 'stable'
+            this.connection &&
+            this.connection.connectionState === 'new' &&
+            this.connection.signalingState === 'stable'
         );
     }
 
     get hasRemoteOffer() {
         return (
+            this.connection &&
             this.connection.connectionState === 'new' &&
             this.connection.signalingState === 'have-remote-offer'
         );
@@ -113,23 +118,29 @@ export class RTCWrapper {
 
     get awaitingRemoteAnswer() {
         return (
+            this.connection &&
             this.connection.connectionState === 'connecting' &&
             this.connection.signalingState === 'have-local-offer'
         );
     }
 
     get isConnectedStatus() {
-        return this.connection.connectionState === 'connected';
+        return this.connection && this.connection.connectionState === 'connected';
     }
 
     get isClosedStatus() {
         return (
+            this.connection &&
             this.connection.connectionState === 'closed' &&
             this.connection.signalingState === 'closed'
         );
     }
 
     createSendChannel(name: string) {
+        if (!this.connection) {
+            throw new Error("The RTC connection hasn't been initialized");
+        }
+
         // If a send channel is needed, it must be created before offering/answering a session
         this.sendChannel = this.connection.createDataChannel(name);
         this.sendChannel.onopen = () => {
@@ -150,6 +161,10 @@ export class RTCWrapper {
     }
 
     async createOffer() {
+        if (!this.connection) {
+            throw new Error("The RTC connection hasn't been initialized");
+        }
+
         this.sessionInit = await this.connection.createOffer();
         this.events.dispatchEvent(
             new CustomEvent(RTCWrapperEvents.offerCreated, {
@@ -160,17 +175,29 @@ export class RTCWrapper {
     }
 
     setLocalDescription() {
+        if (!this.connection) {
+            throw new Error("The RTC connection hasn't been initialized");
+        }
+
         // This operation will generate several ice candidates if a channel has been created by either peer
         // and an internet connection is available
         return this.connection.setLocalDescription(this.sessionInit);
     }
 
     async setRemoteData(sessionInit: RTCSessionDescriptionInit, candidate?: RTCIceCandidate) {
+        if (!this.connection) {
+            throw new Error("The RTC connection hasn't been initialized");
+        }
+
         await this.connection.setRemoteDescription(sessionInit);
         await this.connection.addIceCandidate(candidate);
     }
 
     async createAnswer() {
+        if (!this.connection) {
+            throw new Error("The RTC connection hasn't been initialized");
+        }
+
         this.sessionInit = await this.connection.createAnswer();
         this.events.dispatchEvent(
             new CustomEvent(RTCWrapperEvents.answerCreated, {
@@ -181,6 +208,10 @@ export class RTCWrapper {
     }
 
     async closeConnection() {
+        if (!this.connection) {
+            throw new Error("The RTC connection hasn't been initialized");
+        }
+
         if (this.sendChannel) {
             this.sendChannel.close();
         }
@@ -211,5 +242,16 @@ export class RTCWrapper {
 
             this.handlers = undefined;
         }
+    }
+
+    clear() {
+        this.connection = undefined;
+        this.sessionInit = undefined;
+        this.iceCandidate = undefined;
+        this.sendChannel = undefined;
+        this.receiveChannel = undefined;
+
+        this.unsetEventHandlers();
+        this.handlers = undefined;
     }
 }
