@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import * as ReactDOMClient from 'react-dom/client';
 import { RTCWrapper, RTCWrapperHandlers } from './rtc-wrapper';
 
-// TODO Store and retrieve all ICE Candidates
 // TODO Option to remove logic checks
 // TODO Remove Offer/Answer radio buttons
 // Differentiate native events vs pseudo events
@@ -19,7 +18,7 @@ function App() {
     const [connectionEvents, setConnectionEvents] = useState<string[]>([]);
 
     const [remoteSessionInit, setRemoteSessionInit] = useState('');
-    const [remoteIceCandidate, setRemoteIceCandidate] = useState('');
+    const [remoteIceCandidates, setRemoteIceCandidates] = useState('');
     const [message, setMessage] = useState('');
 
     function updateEventsAndRTCHandlers(
@@ -119,7 +118,7 @@ function App() {
     async function setRemoteData() {
         await rtcWrapper.ref.setRemoteData(
             JSON.parse(remoteSessionInit || '{}'),
-            JSON.parse(remoteIceCandidate || '{}'),
+            JSON.parse(remoteIceCandidates || '[]'),
         );
     }
 
@@ -128,7 +127,7 @@ function App() {
 
         setConnectionEvents([]);
         setMessage('');
-        setRemoteIceCandidate('');
+        setRemoteIceCandidates('');
         setRemoteSessionInit('');
         setRtcWrapper({ ref: rtcWrapper.ref });
     }
@@ -225,8 +224,8 @@ function App() {
                         style={{ width: '100%' }}
                         disabled
                         value={
-                            rtcWrapper.ref.iceCandidate
-                                ? JSON.stringify(rtcWrapper.ref.iceCandidate)
+                            rtcWrapper.ref.iceCandidates?.length > 0
+                                ? JSON.stringify(rtcWrapper.ref.iceCandidates)
                                 : ''
                         }
                     ></textarea>
@@ -271,9 +270,9 @@ function App() {
                         rows={2}
                         style={{ width: '100%' }}
                         disabled={disableSetRemoteData}
-                        value={remoteIceCandidate}
+                        value={remoteIceCandidates}
                         onChange={(event) => {
-                            setRemoteIceCandidate(event.target.value);
+                            setRemoteIceCandidates(event.target.value);
                         }}
                     ></textarea>
                     <br />

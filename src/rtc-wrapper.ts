@@ -31,7 +31,7 @@ export class RTCWrapper {
     protected handlers?: Partial<RTCWrapperHandlers>;
 
     public sessionInit?: RTCSessionDescriptionInit;
-    public iceCandidate?: RTCIceCandidate;
+    public iceCandidates: RTCIceCandidate[] = [];
     public sendChannel?: RTCDataChannel;
     public receiveChannel?: RTCDataChannel;
 
@@ -62,7 +62,7 @@ export class RTCWrapper {
             if (event.candidate) {
                 // The event.candidate must be added by the other peer of the connection;
                 // in this case, the peer will copy it form one tab and paste it to another
-                this.iceCandidate = event.candidate;
+                this.iceCandidates.push(event.candidate);
                 this.events.dispatchEvent(
                     new CustomEvent(RTCWrapperEvents.iceCandidate, {
                         detail: event.candidate,
@@ -184,13 +184,15 @@ export class RTCWrapper {
         return this.connection.setLocalDescription(this.sessionInit);
     }
 
-    async setRemoteData(sessionInit: RTCSessionDescriptionInit, candidate?: RTCIceCandidate) {
+    async setRemoteData(sessionInit: RTCSessionDescriptionInit, candidates: RTCIceCandidate[]) {
         if (!this.connection) {
             throw new Error("The RTC connection hasn't been initialized");
         }
 
         await this.connection.setRemoteDescription(sessionInit);
-        await this.connection.addIceCandidate(candidate);
+        for (let candidate of candidates) {
+            await this.connection.addIceCandidate(candidate);
+        }
     }
 
     async createAnswer() {
@@ -247,7 +249,7 @@ export class RTCWrapper {
     clear() {
         this.connection = undefined;
         this.sessionInit = undefined;
-        this.iceCandidate = undefined;
+        this.iceCandidates = [];
         this.sendChannel = undefined;
         this.receiveChannel = undefined;
 
