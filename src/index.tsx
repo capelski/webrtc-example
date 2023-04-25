@@ -2,6 +2,9 @@ import React, { useEffect, useState } from 'react';
 import * as ReactDOMClient from 'react-dom/client';
 import { RTCWrapper, RTCWrapperHandlers } from './rtc-wrapper';
 
+// TODO Option to remove logic checks
+// TODO Remove Offer/Answer radio buttons
+
 enum ConnectionMode {
     offer = 'offer',
     answer = 'answer',
@@ -98,16 +101,20 @@ function App() {
         setRtcWrapper(new RTCWrapper());
     }
 
-    async function generateOffer() {
+    async function createOffer() {
         rtcWrapper.createSendChannel('offerToAnswer');
-        await rtcWrapper.setOffer();
+        await rtcWrapper.createOffer();
     }
 
-    async function generateAnswer() {
+    async function createAnswer() {
         if (createSendChannel) {
             rtcWrapper.createSendChannel('answerToOffer');
         }
-        await rtcWrapper.setAnswer();
+        await rtcWrapper.createAnswer();
+    }
+
+    function setLocalDescription() {
+        rtcWrapper.setLocalDescription();
     }
 
     async function setRemoteData() {
@@ -122,11 +129,26 @@ function App() {
     }, [rtcWrapper]);
 
     const disableConnectionMode = !rtcWrapper.isNewStatus;
-    const disableGenerateOffer = connectionMode !== ConnectionMode.offer || !rtcWrapper.isNewStatus;
+    const disableGenerateOffer =
+        connectionMode !== ConnectionMode.offer ||
+        !rtcWrapper.isNewStatus ||
+        !!rtcWrapper.sessionInit;
+    const disableSetLocalDescription = !(
+        (connectionMode === ConnectionMode.offer &&
+            rtcWrapper.isNewStatus &&
+            !!rtcWrapper.sessionInit) ||
+        (connectionMode === ConnectionMode.answer &&
+            rtcWrapper.hasRemoteOffer &&
+            !!rtcWrapper.sessionInit)
+    );
     const disableGenerateAnswer =
-        connectionMode !== ConnectionMode.answer || !rtcWrapper.hasRemoteOffer;
+        connectionMode !== ConnectionMode.answer ||
+        !rtcWrapper.hasRemoteOffer ||
+        !!rtcWrapper.sessionInit;
     const disableCreateSendChannel =
-        connectionMode === ConnectionMode.offer || !rtcWrapper.hasRemoteOffer;
+        connectionMode === ConnectionMode.offer ||
+        !rtcWrapper.hasRemoteOffer ||
+        !!rtcWrapper.sessionInit;
     const disableSetRemoteData = !(
         (connectionMode === ConnectionMode.offer && rtcWrapper.awaitingRemoteAnswer) ||
         (connectionMode === ConnectionMode.answer && rtcWrapper.isNewStatus)
@@ -187,12 +209,16 @@ function App() {
                         }
                     ></textarea>
                     <br />
-                    <button onClick={generateOffer} disabled={disableGenerateOffer}>
-                        Generate offer
+                    <button onClick={createOffer} disabled={disableGenerateOffer}>
+                        Create offer
                     </button>
                     &emsp;
-                    <button onClick={generateAnswer} disabled={disableGenerateAnswer}>
-                        Generate answer
+                    <button onClick={setLocalDescription} disabled={disableSetLocalDescription}>
+                        Set local description
+                    </button>
+                    &emsp;
+                    <button onClick={createAnswer} disabled={disableGenerateAnswer}>
+                        Create answer
                     </button>
                     &emsp;
                     <input

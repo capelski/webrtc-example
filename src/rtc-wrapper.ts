@@ -149,17 +149,20 @@ export class RTCWrapper {
         };
     }
 
-    async setOffer() {
+    async createOffer() {
         this.sessionInit = await this.connection.createOffer();
         this.events.dispatchEvent(
             new CustomEvent(RTCWrapperEvents.offerCreated, {
                 detail: this.sessionInit,
             }),
         );
-        // This operation will generate several ice candidates if a channel has been created by this peer
-        // and an internet connection is available
-        await this.connection.setLocalDescription(this.sessionInit);
         return this.sessionInit;
+    }
+
+    setLocalDescription() {
+        // This operation will generate several ice candidates if a channel has been created by either peer
+        // and an internet connection is available
+        return this.connection.setLocalDescription(this.sessionInit);
     }
 
     async setRemoteData(sessionInit: RTCSessionDescriptionInit, candidate?: RTCIceCandidate) {
@@ -167,16 +170,13 @@ export class RTCWrapper {
         await this.connection.addIceCandidate(candidate);
     }
 
-    async setAnswer() {
+    async createAnswer() {
         this.sessionInit = await this.connection.createAnswer();
         this.events.dispatchEvent(
             new CustomEvent(RTCWrapperEvents.answerCreated, {
                 detail: this.sessionInit,
             }),
         );
-        // This operation will generate several ice candidates if a channel has been created by either peer
-        // and an internet connection is available
-        await this.connection.setLocalDescription(this.sessionInit);
         return this.sessionInit;
     }
 
