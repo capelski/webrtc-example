@@ -4,7 +4,12 @@ import { RTCWrapper, RTCWrapperHandlers } from './rtc-wrapper';
 
 // TODO Option to remove logic checks
 // TODO Remove Offer/Answer radio buttons
-// Differentiate native events vs pseudo events
+
+type RTCEvent = {
+    content: string;
+    isPseudoEvent?: boolean;
+    timestamp: Date;
+};
 
 enum ConnectionMode {
     offer = 'offer',
@@ -15,70 +20,95 @@ function App() {
     const [connectionMode, setConnectionMode] = useState<ConnectionMode>(ConnectionMode.offer);
     const [rtcWrapper, setRtcWrapper] = useState<{ ref: RTCWrapper }>({ ref: new RTCWrapper() });
     const [createSendChannel, setCreateSendChannel] = useState(true);
-    const [connectionEvents, setConnectionEvents] = useState<string[]>([]);
+    const [connectionEvents, setConnectionEvents] = useState<RTCEvent[]>([]);
 
     const [remoteSessionInit, setRemoteSessionInit] = useState('');
     const [remoteIceCandidates, setRemoteIceCandidates] = useState('');
     const [message, setMessage] = useState('');
 
     function updateEventsAndRTCHandlers(
-        currentConnectionEvents: string[],
-        newConnectionEvents: string[] = [],
+        currentConnectionEvents: RTCEvent[],
+        newConnectionEvents: RTCEvent[] = [],
     ) {
-        const nextConnectionEvents = newConnectionEvents
-            .map((event) => `${new Date().toISOString().substring(11, 23)} ${event}`)
-            .concat(currentConnectionEvents);
+        const nextConnectionEvents = newConnectionEvents.concat(currentConnectionEvents);
         setConnectionEvents(nextConnectionEvents);
 
         const handlers: RTCWrapperHandlers = {
             onAnswerCreated: (event) => {
                 updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    `Answer created: ${event.detail.sdp?.substring(0, 15)}...`,
+                    {
+                        content: `Answer created: ${event.detail.sdp?.substring(0, 15)}...`,
+                        isPseudoEvent: true,
+                        timestamp: new Date(),
+                    },
                 ]);
             },
             onConnectionStateChange: (event) => {
-                const newEvents = [`Connection state change: ${event.detail}`];
+                const newEvents: RTCEvent[] = [
+                    { content: `Connection state change: ${event.detail}`, timestamp: new Date() },
+                ];
                 if (event.detail === 'disconnected') {
                     // Connection was closed by the remote peer; the app state must be updated on this peer
                     rtcWrapper.ref.closeConnection();
-                    newEvents.push('Connection closed by remote peer');
+                    newEvents.unshift({
+                        content: 'Connection closed by remote peer',
+                        isPseudoEvent: true,
+                        timestamp: new Date(),
+                    });
                 }
                 updateEventsAndRTCHandlers(nextConnectionEvents, newEvents);
             },
             onIceCandidate: (event) => {
                 updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    `ICE candidate generated: ${event.detail.address}`,
+                    {
+                        content: `ICE candidate generated: ${event.detail.address}`,
+                        timestamp: new Date(),
+                    },
                 ]);
             },
             onMessageReceived: (event) => {
                 updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    `Message received: ${event.detail}`,
+                    { content: `Message received: ${event.detail}`, timestamp: new Date() },
                 ]);
             },
             onOfferCreated: (event) => {
                 updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    `Offer created: ${event.detail.sdp?.substring(0, 15)}...`,
+                    {
+                        content: `Offer created: ${event.detail.sdp?.substring(0, 15)}...`,
+                        isPseudoEvent: true,
+                        timestamp: new Date(),
+                    },
                 ]);
             },
             onReceiveChannelClosed: () => {
-                updateEventsAndRTCHandlers(nextConnectionEvents, ['Receiving channel closed']);
+                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                    { content: 'Receiving channel closed', timestamp: new Date() },
+                ]);
             },
             onReceiveChannelOpened: (event) => {
                 updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    `Receiving channel opened: ${event.detail.label}`,
+                    {
+                        content: `Receiving channel opened: ${event.detail.label}`,
+                        timestamp: new Date(),
+                    },
                 ]);
             },
             onSendChannelClosed: () => {
-                updateEventsAndRTCHandlers(nextConnectionEvents, ['Sending channel closed']);
+                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                    { content: 'Sending channel closed', timestamp: new Date() },
+                ]);
             },
             onSendChannelOpened: (event) => {
                 updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    `Sending channel opened: ${event.detail.label}`,
+                    {
+                        content: `Sending channel opened: ${event.detail.label}`,
+                        timestamp: new Date(),
+                    },
                 ]);
             },
             onSignalingStateChange: (event) => {
                 updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    `Signaling state change: ${event.detail}`,
+                    { content: `Signaling state change: ${event.detail}`, timestamp: new Date() },
                 ]);
             },
         };
@@ -300,7 +330,13 @@ function App() {
                         rtcWrapper.ref.sendChannel!.send(message);
                         setMessage('');
 
-                        updateEventsAndRTCHandlers(connectionEvents, [`Message sent: ${message}`]);
+                        updateEventsAndRTCHandlers(connectionEvents, [
+                            {
+                                content: `Message sent: ${message}`,
+                                isPseudoEvent: true,
+                                timestamp: new Date(),
+                            },
+                        ]);
                     }}
                     disabled={disableSend}
                 >
@@ -329,7 +365,11 @@ function App() {
                     onClick={() => {
                         rtcWrapper.ref.closeConnection();
                         updateEventsAndRTCHandlers(connectionEvents, [
-                            'Connection closed by local peer',
+                            {
+                                content: 'Connection closed by local peer',
+                                isPseudoEvent: true,
+                                timestamp: new Date(),
+                            },
                         ]);
                     }}
                     disabled={disableCloseConnection}
@@ -344,8 +384,14 @@ function App() {
 
             <div>
                 <h2>Events</h2>
-                {connectionEvents.map((message, index) => (
-                    <p key={`event-${index}`}>- {message}</p>
+                {connectionEvents.map((cEvent, index) => (
+                    <p
+                        key={`event-${index}`}
+                        style={cEvent.isPseudoEvent ? { fontStyle: 'italic' } : undefined}
+                    >
+                        {cEvent.isPseudoEvent ? '*' : '-'}{' '}
+                        {cEvent.timestamp.toISOString().substring(11, 23)} {cEvent.content}
+                    </p>
                 ))}
             </div>
         </div>
