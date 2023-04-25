@@ -3,7 +3,9 @@ import * as ReactDOMClient from 'react-dom/client';
 import { RTCWrapper, RTCWrapperHandlers } from './rtc-wrapper';
 
 // TODO Option to remove logic checks
-// TODO Remove Offer/Answer radio buttons
+// TODO Split Set remote data
+// TODO Display a message to explain what to do with local offer/ICE candidates
+// TODO Message stating that no channel on creation will result in errors
 
 type RTCEvent = {
     content: string;
@@ -11,20 +13,13 @@ type RTCEvent = {
     timestamp: Date;
 };
 
-enum ConnectionMode {
-    offer = 'offer',
-    answer = 'answer',
-}
-
 function App() {
-    const [connectionMode, setConnectionMode] = useState<ConnectionMode>(ConnectionMode.offer);
-    const [rtcWrapper, setRtcWrapper] = useState<{ ref: RTCWrapper }>({ ref: new RTCWrapper() });
-    const [createSendChannel, setCreateSendChannel] = useState(true);
     const [connectionEvents, setConnectionEvents] = useState<RTCEvent[]>([]);
-
+    const [createSendChannel, setCreateSendChannel] = useState(true);
+    const [message, setMessage] = useState('');
     const [remoteSessionInit, setRemoteSessionInit] = useState('');
     const [remoteIceCandidates, setRemoteIceCandidates] = useState('');
-    const [message, setMessage] = useState('');
+    const [rtcWrapper, setRtcWrapper] = useState<{ ref: RTCWrapper }>({ ref: new RTCWrapper() });
 
     function updateEventsAndRTCHandlers(
         currentConnectionEvents: RTCEvent[],
@@ -121,16 +116,10 @@ function App() {
         setRtcWrapper({ ref: rtcWrapper.ref });
     }
 
-    function connectionModeChange(event: React.ChangeEvent<HTMLInputElement>) {
-        const nextConnectionMode = event.target.value as ConnectionMode;
-        setConnectionMode(nextConnectionMode);
-        if (nextConnectionMode === ConnectionMode.offer) {
-            setCreateSendChannel(true);
-        }
-    }
-
     async function createOffer() {
-        rtcWrapper.ref.createSendChannel('offerToAnswer');
+        if (createSendChannel) {
+            rtcWrapper.ref.createSendChannel('offerToAnswer');
+        }
         await rtcWrapper.ref.createOffer();
     }
 
@@ -167,30 +156,17 @@ function App() {
     }, [rtcWrapper]);
 
     const disableInitialize = !!rtcWrapper.ref.connection;
-    const disableConnectionMode = !rtcWrapper.ref.isNewStatus;
-    const disableGenerateOffer =
-        connectionMode !== ConnectionMode.offer ||
-        !rtcWrapper.ref.isNewStatus ||
-        !!rtcWrapper.ref.sessionInit;
-    const disableSetLocalDescription = !(
-        (connectionMode === ConnectionMode.offer &&
-            rtcWrapper.ref.isNewStatus &&
-            !!rtcWrapper.ref.sessionInit) ||
-        (connectionMode === ConnectionMode.answer &&
-            rtcWrapper.ref.hasRemoteOffer &&
-            !!rtcWrapper.ref.sessionInit)
-    );
-    const disableGenerateAnswer =
-        connectionMode !== ConnectionMode.answer ||
-        !rtcWrapper.ref.hasRemoteOffer ||
-        !!rtcWrapper.ref.sessionInit;
     const disableCreateSendChannel =
-        connectionMode === ConnectionMode.offer ||
-        !rtcWrapper.ref.hasRemoteOffer ||
-        !!rtcWrapper.ref.sessionInit;
+        !!rtcWrapper.ref.sessionInit ||
+        (!rtcWrapper.ref.isNewStatus && !rtcWrapper.ref.hasRemoteOffer);
+    const disableGenerateOffer = !!rtcWrapper.ref.sessionInit || !rtcWrapper.ref.isNewStatus;
+    const disableGenerateAnswer = !!rtcWrapper.ref.sessionInit || !rtcWrapper.ref.hasRemoteOffer;
+    const disableSetLocalDescription =
+        !rtcWrapper.ref.sessionInit ||
+        (!rtcWrapper.ref.isNewStatus && !rtcWrapper.ref.hasRemoteOffer);
     const disableSetRemoteData = !(
-        (connectionMode === ConnectionMode.offer && rtcWrapper.ref.awaitingRemoteAnswer) ||
-        (connectionMode === ConnectionMode.answer && rtcWrapper.ref.isNewStatus)
+        (!rtcWrapper.ref.sessionInit && rtcWrapper.ref.isNewStatus) ||
+        (!!rtcWrapper.ref.sessionInit && rtcWrapper.ref.awaitingRemoteAnswer)
     );
     const disableCloseConnection = !rtcWrapper.ref.isConnectedStatus;
     const disableSend = !rtcWrapper.ref.isConnectedStatus || !rtcWrapper.ref.sendChannel;
@@ -210,28 +186,6 @@ function App() {
                     <button onClick={initialize} disabled={disableInitialize}>
                         Initialize
                     </button>
-                </p>
-
-                <p>
-                    Peer:{' '}
-                    <input
-                        type="radio"
-                        name="connection-mode"
-                        value={ConnectionMode.offer}
-                        checked={connectionMode === ConnectionMode.offer}
-                        onChange={connectionModeChange}
-                        disabled={disableConnectionMode}
-                    />
-                    Offer
-                    <input
-                        type="radio"
-                        name="connection-mode"
-                        value={ConnectionMode.answer}
-                        checked={connectionMode === ConnectionMode.answer}
-                        onChange={connectionModeChange}
-                        disabled={disableConnectionMode}
-                    />
-                    Answer
                 </p>
 
                 <div>
@@ -260,18 +214,6 @@ function App() {
                         }
                     ></textarea>
                     <br />
-                    <button onClick={createOffer} disabled={disableGenerateOffer}>
-                        Create offer
-                    </button>
-                    &emsp;
-                    <button onClick={setLocalDescription} disabled={disableSetLocalDescription}>
-                        Set local description
-                    </button>
-                    &emsp;
-                    <button onClick={createAnswer} disabled={disableGenerateAnswer}>
-                        Create answer
-                    </button>
-                    &emsp;
                     <input
                         type="checkbox"
                         checked={createSendChannel}
@@ -280,7 +222,18 @@ function App() {
                         }}
                         disabled={disableCreateSendChannel}
                     />
-                    Create send channel
+                    Create send channel&emsp;
+                    <button onClick={createOffer} disabled={disableGenerateOffer}>
+                        Create offer
+                    </button>
+                    &emsp;
+                    <button onClick={createAnswer} disabled={disableGenerateAnswer}>
+                        Create answer
+                    </button>
+                    &emsp;
+                    <button onClick={setLocalDescription} disabled={disableSetLocalDescription}>
+                        Set local description
+                    </button>
                     <br />
                     <br />
                     <span>Remote session</span>
