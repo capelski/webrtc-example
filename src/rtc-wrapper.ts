@@ -104,6 +104,14 @@ export class RTCWrapper {
         );
     }
 
+    get hasLocalOffer() {
+        return (
+            this.connection &&
+            this.connection.connectionState === 'new' &&
+            this.connection.signalingState === 'have-local-offer'
+        );
+    }
+
     get hasRemoteOffer() {
         return (
             this.connection &&

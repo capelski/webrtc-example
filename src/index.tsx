@@ -176,6 +176,10 @@ function App() {
     const disableCloseReceive = !rtcWrapper.ref.isConnectedStatus || !rtcWrapper.ref.receiveChannel;
     const disableClear = !rtcWrapper.ref.isClosedStatus;
 
+    const displayChannelWarning =
+        !disableCreateSendChannel && rtcWrapper.ref.isNewStatus && !createSendChannel;
+    const displaySignalingInstructions = rtcWrapper.ref.hasLocalOffer;
+
     return (
         <div>
             <div>
@@ -205,6 +209,17 @@ function App() {
                                 : ''
                         }
                     ></textarea>
+                    {displaySignalingInstructions && (
+                        <React.Fragment>
+                            <br />
+                            <span style={{ color: 'lightblue' }}>
+                                ℹ️ Copy the "Local session" data into the "Remote session" textarea
+                                of the other tab
+                            </span>
+                            <br />
+                            <br />
+                        </React.Fragment>
+                    )}
                     <span>Local ICE Candidates</span>
                     <br />
                     <textarea
@@ -217,6 +232,17 @@ function App() {
                                 : ''
                         }
                     ></textarea>
+                    {displaySignalingInstructions && (
+                        <React.Fragment>
+                            <br />
+                            <span style={{ color: 'lightblue' }}>
+                                ℹ️ Copy the "Local ICE Candidates" data into the "Remote ICE
+                                Candidates" textarea of the other tab
+                            </span>
+                            <br />
+                            <br />
+                        </React.Fragment>
+                    )}
                     <br />
                     <input
                         type="checkbox"
@@ -239,14 +265,12 @@ function App() {
                         Set local description
                     </button>
                     <br />
-                    {!disableCreateSendChannel &&
-                        rtcWrapper.ref.isNewStatus &&
-                        !createSendChannel && (
-                            <p style={{ color: 'red' }}>
-                                ❗️ Creating an offer without having created a data channel first
-                                will NOT generate ICE Candidates, thus preventing the connection.
-                            </p>
-                        )}
+                    {displayChannelWarning && (
+                        <p style={{ color: 'red' }}>
+                            ❗️ Creating an offer without having created a data channel first will
+                            NOT generate ICE Candidates, thus preventing the connection.
+                        </p>
+                    )}
                     <br />
                     <span>Remote session</span>
                     <br />
