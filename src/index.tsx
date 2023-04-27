@@ -1,9 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import * as ReactDOMClient from 'react-dom/client';
 import { RTCWrapper, RTCWrapperHandlers } from './rtc-wrapper';
 
-// TODO Option to remove logic checks
-// TODO Split Set remote data
 // TODO Display a message to explain what to do with local offer/ICE candidates
 // TODO Message stating that no channel on creation will result in errors
 
@@ -16,6 +14,7 @@ type RTCEvent = {
 function App() {
     const [connectionEvents, setConnectionEvents] = useState<RTCEvent[]>([]);
     const [createSendChannel, setCreateSendChannel] = useState(true);
+    const [hasAddedRemoteCandidates, setHasAddedRemoteCandidates] = useState(false);
     const [message, setMessage] = useState('');
     const [remoteSessionInit, setRemoteSessionInit] = useState('');
     const [remoteIceCandidates, setRemoteIceCandidates] = useState('');
@@ -26,18 +25,8 @@ function App() {
         newConnectionEvents: RTCEvent[] = [],
     ) {
         const nextConnectionEvents = newConnectionEvents.concat(currentConnectionEvents);
-        setConnectionEvents(nextConnectionEvents);
 
         const handlers: RTCWrapperHandlers = {
-            onAnswerCreated: (event) => {
-                updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    {
-                        content: `Answer created: ${event.detail.sdp?.substring(0, 15)}...`,
-                        isPseudoEvent: true,
-                        timestamp: new Date(),
-                    },
-                ]);
-            },
             onConnectionStateChange: (event) => {
                 const newEvents: RTCEvent[] = [
                     { content: `Connection state change: ${event.detail}`, timestamp: new Date() },
@@ -64,15 +53,6 @@ function App() {
             onMessageReceived: (event) => {
                 updateEventsAndRTCHandlers(nextConnectionEvents, [
                     { content: `Message received: ${event.detail}`, timestamp: new Date() },
-                ]);
-            },
-            onOfferCreated: (event) => {
-                updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    {
-                        content: `Offer created: ${event.detail.sdp?.substring(0, 15)}...`,
-                        isPseudoEvent: true,
-                        timestamp: new Date(),
-                    },
                 ]);
             },
             onReceiveChannelClosed: () => {
@@ -109,10 +89,14 @@ function App() {
         };
 
         rtcWrapper.ref.setEventHandlers(handlers);
+
+        setConnectionEvents(nextConnectionEvents);
+        setRtcWrapper({ ref: rtcWrapper.ref });
     }
 
     function initialize() {
         rtcWrapper.ref.initialize();
+        updateEventsAndRTCHandlers([]);
         setRtcWrapper({ ref: rtcWrapper.ref });
     }
 
@@ -121,6 +105,13 @@ function App() {
             rtcWrapper.ref.createSendChannel('offerToAnswer');
         }
         await rtcWrapper.ref.createOffer();
+        updateEventsAndRTCHandlers(connectionEvents, [
+            {
+                content: `Offer created: ${rtcWrapper.ref.sessionInit?.sdp?.substring(0, 15)}...`,
+                isPseudoEvent: true,
+                timestamp: new Date(),
+            },
+        ]);
     }
 
     async function createAnswer() {
@@ -128,17 +119,33 @@ function App() {
             rtcWrapper.ref.createSendChannel('answerToOffer');
         }
         await rtcWrapper.ref.createAnswer();
+        updateEventsAndRTCHandlers(connectionEvents, [
+            {
+                content: `Answer created: ${rtcWrapper.ref.sessionInit?.sdp?.substring(0, 15)}...`,
+                isPseudoEvent: true,
+                timestamp: new Date(),
+            },
+        ]);
     }
 
-    function setLocalDescription() {
-        rtcWrapper.ref.setLocalDescription();
+    async function setLocalDescription() {
+        await rtcWrapper.ref.setLocalDescription();
     }
 
-    async function setRemoteData() {
-        await rtcWrapper.ref.setRemoteData(
-            JSON.parse(remoteSessionInit || '{}'),
-            JSON.parse(remoteIceCandidates || '[]'),
-        );
+    async function setRemoteDescription() {
+        await rtcWrapper.ref.setRemoteDescription(JSON.parse(remoteSessionInit || '{}'));
+    }
+
+    async function setRemoteIceCandidatesHandler() {
+        await rtcWrapper.ref.setRemoteICECandidates(JSON.parse(remoteIceCandidates || '[]'));
+        updateEventsAndRTCHandlers(connectionEvents, [
+            {
+                content: `Remote ICE Candidates added`,
+                isPseudoEvent: true,
+                timestamp: new Date(),
+            },
+        ]);
+        setHasAddedRemoteCandidates(true);
     }
 
     function clear() {
@@ -151,22 +158,20 @@ function App() {
         setRtcWrapper({ ref: rtcWrapper.ref });
     }
 
-    useEffect(() => {
-        updateEventsAndRTCHandlers([]);
-    }, [rtcWrapper]);
-
     const disableInitialize = !!rtcWrapper.ref.connection;
     const disableCreateOffer = !rtcWrapper.ref.isNewStatus;
-    const disableCreateAnswer = !rtcWrapper.ref.hasRemoteOffer;
+    const disableCreateAnswer = !rtcWrapper.ref.hasRemoteOffer || !hasAddedRemoteCandidates;
     const disableCreateSendChannel =
         !!rtcWrapper.ref.sessionInit || (disableCreateOffer && disableCreateAnswer);
     const disableSetLocalDescription =
         !rtcWrapper.ref.sessionInit ||
         (!rtcWrapper.ref.isNewStatus && !rtcWrapper.ref.hasRemoteOffer);
-    const disableSetRemoteData = !(
+    const disableSetRemoteDescription = !(
         (!rtcWrapper.ref.sessionInit && rtcWrapper.ref.isNewStatus) ||
         (!!rtcWrapper.ref.sessionInit && rtcWrapper.ref.awaitingRemoteAnswer)
     );
+    const disableSetRemoteICECandidates =
+        hasAddedRemoteCandidates || !!rtcWrapper.ref.sessionInit || !rtcWrapper.ref.hasRemoteOffer;
     const disableCloseConnection = !rtcWrapper.ref.isConnectedStatus;
     const disableSend = !rtcWrapper.ref.isConnectedStatus || !rtcWrapper.ref.sendChannel;
     const disableCloseReceive = !rtcWrapper.ref.isConnectedStatus || !rtcWrapper.ref.receiveChannel;
@@ -176,15 +181,16 @@ function App() {
         <div>
             <div>
                 <h2>Setup</h2>
-                <p>
-                    Connection status: {rtcWrapper.ref.connection?.connectionState || '-'} /{' '}
-                    {rtcWrapper.ref.connection?.signalingState || '-'}
-                </p>
 
                 <p>
                     <button onClick={initialize} disabled={disableInitialize}>
                         Initialize
                     </button>
+                </p>
+
+                <p>
+                    Connection status: {rtcWrapper.ref.connection?.connectionState || '-'} /{' '}
+                    {rtcWrapper.ref.connection?.signalingState || '-'}
                 </p>
 
                 <div>
@@ -200,7 +206,7 @@ function App() {
                                 : ''
                         }
                     ></textarea>
-                    <span>Local ICE Candidate</span>
+                    <span>Local ICE Candidates</span>
                     <br />
                     <textarea
                         rows={2}
@@ -240,18 +246,27 @@ function App() {
                     <textarea
                         rows={5}
                         style={{ width: '100%' }}
-                        disabled={disableSetRemoteData}
+                        disabled={disableSetRemoteDescription}
                         value={remoteSessionInit}
                         onChange={(event) => {
                             setRemoteSessionInit(event.target.value);
                         }}
                     ></textarea>
-                    <span>Remote ICE Candidate</span>
+                    <br />
+                    <button
+                        onClick={setRemoteDescription}
+                        disabled={!remoteSessionInit || disableSetRemoteDescription}
+                    >
+                        Set remote description
+                    </button>
+                    <br />
+                    <br />
+                    <span>Remote ICE Candidates</span>
                     <br />
                     <textarea
                         rows={2}
                         style={{ width: '100%' }}
-                        disabled={disableSetRemoteData}
+                        disabled={disableSetRemoteICECandidates}
                         value={remoteIceCandidates}
                         onChange={(event) => {
                             setRemoteIceCandidates(event.target.value);
@@ -259,8 +274,11 @@ function App() {
                     ></textarea>
                     <br />
                     {
-                        <button onClick={setRemoteData} disabled={disableSetRemoteData}>
-                            Set remote data
+                        <button
+                            onClick={setRemoteIceCandidatesHandler}
+                            disabled={!remoteIceCandidates || disableSetRemoteICECandidates}
+                        >
+                            Set remote ICE candidates
                         </button>
                     }
                 </div>
