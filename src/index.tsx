@@ -2,8 +2,6 @@ import React, { useState } from 'react';
 import * as ReactDOMClient from 'react-dom/client';
 import { RTCWrapper, RTCWrapperHandlers } from './rtc-wrapper';
 
-// TODO Display a message to explain what to do with local offer/ICE candidates
-
 type RTCEvent = {
     content: string;
     isPseudoEvent?: boolean;
