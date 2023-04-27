@@ -3,7 +3,6 @@ import * as ReactDOMClient from 'react-dom/client';
 import { RTCWrapper, RTCWrapperHandlers } from './rtc-wrapper';
 
 // TODO Display a message to explain what to do with local offer/ICE candidates
-// TODO Message stating that no channel on creation will result in errors
 
 type RTCEvent = {
     content: string;
@@ -240,6 +239,14 @@ function App() {
                         Set local description
                     </button>
                     <br />
+                    {!disableCreateSendChannel &&
+                        rtcWrapper.ref.isNewStatus &&
+                        !createSendChannel && (
+                            <p style={{ color: 'red' }}>
+                                ❗️ Creating an offer without having created a data channel first
+                                will NOT generate ICE Candidates, thus preventing the connection.
+                            </p>
+                        )}
                     <br />
                     <span>Remote session</span>
                     <br />
