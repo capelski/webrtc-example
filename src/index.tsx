@@ -216,7 +216,9 @@ function App() {
     const disableInitialize = !!rtcWrapper.ref.connection;
     const disableCreateDataChannel = !rtcWrapper.ref.isNewStatus || !!rtcWrapper.ref.dataChannel;
     const disableCreateStream =
-        mediaStreamLoading || !!rtcWrapper.ref.localTrack || !rtcWrapper.ref.isNewStatus;
+        mediaStreamLoading ||
+        !!rtcWrapper.ref.localTrack ||
+        (!rtcWrapper.ref.isNewStatus && !rtcWrapper.ref.hasRemoteOffer);
     const disableCreateOffer =
         !rtcWrapper.ref.isNewStatus || (!rtcWrapper.ref.dataChannel && !rtcWrapper.ref.localTrack);
     const disableCreateAnswer = !rtcWrapper.ref.hasRemoteOffer || !hasAddedRemoteCandidates;
