@@ -1,24 +1,21 @@
 export enum RTCWrapperEvents {
-    connectionEnded = 'onConnectionEnded',
     connectionStateChange = 'onConnectionStateChange',
+    dataChannelClosed = 'onDataChannelClosed',
+    dataChannelOpened = 'onDataChannelOpened',
     iceCandidate = 'onIceCandidate',
     messageReceived = 'onMessageReceived',
-    receiveChannelClosed = 'onReceiveChannelClosed',
-    receiveChannelOpened = 'onReceiveChannelOpened',
-    sendChannelClosed = 'onSendChannelClosed',
-    sendChannelOpened = 'onSendChannelOpened',
     signalingStateChange = 'onSignalingStateChange',
+    track = 'onTrack',
 }
 
 export type RTCWrapperHandlers = {
     [RTCWrapperEvents.connectionStateChange]: (event: CustomEvent<RTCPeerConnectionState>) => void;
+    [RTCWrapperEvents.dataChannelClosed]: (event: CustomEvent<RTCDataChannel>) => void;
+    [RTCWrapperEvents.dataChannelOpened]: (event: CustomEvent<RTCDataChannel>) => void;
     [RTCWrapperEvents.iceCandidate]: (event: CustomEvent<RTCIceCandidate>) => void;
     [RTCWrapperEvents.messageReceived]: (event: CustomEvent<string>) => void;
-    [RTCWrapperEvents.receiveChannelClosed]: (event: CustomEvent<undefined>) => void;
-    [RTCWrapperEvents.receiveChannelOpened]: (event: CustomEvent<RTCDataChannel>) => void;
-    [RTCWrapperEvents.sendChannelClosed]: (event: CustomEvent<undefined>) => void;
-    [RTCWrapperEvents.sendChannelOpened]: (event: CustomEvent<RTCDataChannel>) => void;
     [RTCWrapperEvents.signalingStateChange]: (event: CustomEvent<RTCSignalingState>) => void;
+    [RTCWrapperEvents.track]: (event: CustomEvent<MediaStreamTrack>) => void;
 };
 
 export class RTCWrapper {
@@ -28,8 +25,10 @@ export class RTCWrapper {
 
     public sessionInit?: RTCSessionDescriptionInit;
     public iceCandidates: RTCIceCandidate[] = [];
-    public sendChannel?: RTCDataChannel;
-    public receiveChannel?: RTCDataChannel;
+
+    public dataChannel?: RTCDataChannel;
+    public localTrack?: MediaStreamTrack;
+    public remoteTrack?: MediaStreamTrack;
 
     constructor() {
         this.events = new EventTarget();
@@ -56,8 +55,7 @@ export class RTCWrapper {
 
         this.connection.onicecandidate = (event) => {
             if (event.candidate) {
-                // The event.candidate must be added by the other peer of the connection;
-                // in this case, the peer will copy it form one tab and paste it to another
+                // The event.candidate must be added by the peer answering the connection
                 this.iceCandidates.push(event.candidate);
                 this.events.dispatchEvent(
                     new CustomEvent(RTCWrapperEvents.iceCandidate, {
@@ -67,32 +65,21 @@ export class RTCWrapper {
             }
         };
 
-        // If the peer has created a channel, this method will be called upon connection established
+        // This method will be called when the peer creates a channel
         this.connection.ondatachannel = (event) => {
-            this.receiveChannel = event.channel;
+            this.dataChannel = event.channel;
+            this.processDataChannel(this.dataChannel);
+        };
 
-            event.channel.onmessage = (event) => {
-                this.events.dispatchEvent(
-                    new CustomEvent(RTCWrapperEvents.messageReceived, {
-                        detail: event.data,
-                    }),
-                );
-            };
-            event.channel.onopen = () => {
-                this.events.dispatchEvent(
-                    new CustomEvent(RTCWrapperEvents.receiveChannelOpened, {
-                        detail: this.receiveChannel,
-                    }),
-                );
-            };
-            event.channel.onclose = () => {
-                this.events.dispatchEvent(
-                    new CustomEvent(RTCWrapperEvents.receiveChannelClosed, {
-                        detail: undefined,
-                    }),
-                );
-                this.receiveChannel = undefined;
-            };
+        // This method will be called when the peer adds a stream track
+        this.connection.ontrack = (event) => {
+            this.remoteTrack = event.track;
+
+            this.events.dispatchEvent(
+                new CustomEvent(RTCWrapperEvents.track, {
+                    detail: this.remoteTrack,
+                }),
+            );
         };
     }
 
@@ -128,6 +115,14 @@ export class RTCWrapper {
         );
     }
 
+    get awaitingAnswerAcceptance() {
+        return (
+            this.connection &&
+            this.connection.connectionState === 'connecting' &&
+            this.connection.signalingState === 'stable'
+        );
+    }
+
     get isConnectedStatus() {
         return this.connection && this.connection.connectionState === 'connected';
     }
@@ -140,32 +135,49 @@ export class RTCWrapper {
         );
     }
 
-    createSendChannel(name: string) {
+    private processDataChannel(dataChannel: RTCDataChannel) {
+        dataChannel.onopen = () => {
+            this.events.dispatchEvent(
+                new CustomEvent(RTCWrapperEvents.dataChannelOpened, {
+                    detail: dataChannel,
+                }),
+            );
+        };
+
+        dataChannel.onmessage = (event) => {
+            this.events.dispatchEvent(
+                new CustomEvent(RTCWrapperEvents.messageReceived, {
+                    detail: event.data,
+                }),
+            );
+        };
+
+        dataChannel.onclose = () => {
+            this.events.dispatchEvent(
+                new CustomEvent(RTCWrapperEvents.dataChannelClosed, {
+                    detail: this.dataChannel,
+                }),
+            );
+            this.dataChannel = undefined;
+        };
+    }
+
+    createDataChannel(name: string) {
         if (!this.connection) {
             throw new Error("The RTC connection hasn't been initialized");
         }
 
-        if (this.sendChannel) {
-            this.sendChannel.close();
+        this.dataChannel = this.connection.createDataChannel(name);
+        this.processDataChannel(this.dataChannel);
+    }
+
+    async addUserMediaTrack(track: MediaStreamTrack) {
+        if (!this.connection) {
+            throw new Error("The RTC connection hasn't been initialized");
         }
 
-        // If a send channel is needed, it must be created before offering/answering a session
-        this.sendChannel = this.connection.createDataChannel(name);
-        this.sendChannel.onopen = () => {
-            this.events.dispatchEvent(
-                new CustomEvent(RTCWrapperEvents.sendChannelOpened, {
-                    detail: this.sendChannel,
-                }),
-            );
-        };
-        this.sendChannel.onclose = () => {
-            this.events.dispatchEvent(
-                new CustomEvent(RTCWrapperEvents.sendChannelClosed, {
-                    detail: undefined,
-                }),
-            );
-            this.sendChannel = undefined;
-        };
+        this.localTrack = track;
+        this.connection.addTrack(track);
     }
 
     async createOffer() {
@@ -219,14 +231,18 @@ export class RTCWrapper {
             throw new Error("The RTC connection hasn't been initialized");
         }
 
-        if (this.sendChannel) {
-            this.sendChannel.close();
+        if (this.dataChannel) {
+            this.dataChannel.close();
         }
-        if (this.receiveChannel) {
-            this.receiveChannel.close();
+
+        if (this.localTrack) {
+            this.localTrack.stop();
         }
-        this.sendChannel = undefined;
-        this.receiveChannel = undefined;
+
+        if (this.remoteTrack) {
+            this.remoteTrack.stop();
+        }
+
         this.connection.close();
     }
 
@@ -255,8 +271,10 @@ export class RTCWrapper {
         this.connection = undefined;
         this.sessionInit = undefined;
         this.iceCandidates = [];
-        this.sendChannel = undefined;
-        this.receiveChannel = undefined;
+
+        this.dataChannel = undefined;
+        this.localTrack = undefined;
+        this.remoteTrack = undefined;
 
         this.unsetEventHandlers();
         this.handlers = undefined;

@@ -1,6 +1,11 @@
-import React, { useState } from 'react';
+import React, { RefObject, useRef, useState } from 'react';
 import * as ReactDOMClient from 'react-dom/client';
+import { videoSize } from './constants';
 import { RTCWrapper, RTCWrapperHandlers } from './rtc-wrapper';
+
+// TODO Create video on answer only when the connection has stream
+// TODO Allow toggling data channel creation upon connection established?
+// TODO Allow toggling video stream creation upon connection established?
 
 type RTCEvent = {
     content: string;
@@ -10,12 +15,15 @@ type RTCEvent = {
 
 function App() {
     const [connectionEvents, setConnectionEvents] = useState<RTCEvent[]>([]);
-    const [createSendChannel, setCreateSendChannel] = useState(true);
     const [hasAddedRemoteCandidates, setHasAddedRemoteCandidates] = useState(false);
+    const [mediaStreamLoading, setMediaStreamLoading] = useState(false);
     const [message, setMessage] = useState('');
     const [remoteSessionInit, setRemoteSessionInit] = useState('');
     const [remoteIceCandidates, setRemoteIceCandidates] = useState('');
     const [rtcWrapper, setRtcWrapper] = useState<{ ref: RTCWrapper }>({ ref: new RTCWrapper() });
+
+    const localVideo = useRef<HTMLVideoElement>(null);
+    const remoteVideo = useRef<HTMLVideoElement>(null);
 
     function updateEventsAndRTCHandlers(
         currentConnectionEvents: RTCEvent[],
@@ -30,7 +38,7 @@ function App() {
                 ];
                 if (event.detail === 'disconnected') {
                     // Connection was closed by the remote peer; the app state must be updated on this peer
-                    rtcWrapper.ref.closeConnection();
+                    closeConnection();
                     newEvents.unshift({
                         content: 'Connection closed by remote peer',
                         isPseudoEvent: true,
@@ -38,6 +46,22 @@ function App() {
                     });
                 }
                 updateEventsAndRTCHandlers(nextConnectionEvents, newEvents);
+            },
+            onDataChannelClosed: (event) => {
+                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                    {
+                        content: `Data channel closed: ${event.detail.label}`,
+                        timestamp: new Date(),
+                    },
+                ]);
+            },
+            onDataChannelOpened: (event) => {
+                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                    {
+                        content: `Data channel opened: ${event.detail.label}`,
+                        timestamp: new Date(),
+                    },
+                ]);
             },
             onIceCandidate: (event) => {
                 updateEventsAndRTCHandlers(nextConnectionEvents, [
@@ -52,35 +76,15 @@ function App() {
                     { content: `Message received: ${event.detail}`, timestamp: new Date() },
                 ]);
             },
-            onReceiveChannelClosed: () => {
-                updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    { content: 'Receiving channel closed', timestamp: new Date() },
-                ]);
-            },
-            onReceiveChannelOpened: (event) => {
-                updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    {
-                        content: `Receiving channel opened: ${event.detail.label}`,
-                        timestamp: new Date(),
-                    },
-                ]);
-            },
-            onSendChannelClosed: () => {
-                updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    { content: 'Sending channel closed', timestamp: new Date() },
-                ]);
-            },
-            onSendChannelOpened: (event) => {
-                updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    {
-                        content: `Sending channel opened: ${event.detail.label}`,
-                        timestamp: new Date(),
-                    },
-                ]);
-            },
             onSignalingStateChange: (event) => {
                 updateEventsAndRTCHandlers(nextConnectionEvents, [
                     { content: `Signaling state change: ${event.detail}`, timestamp: new Date() },
+                ]);
+            },
+            onTrack: () => {
+                consumeStreamTrack(remoteVideo, rtcWrapper.ref!.remoteTrack!);
+                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                    { content: `Media stream opened`, timestamp: new Date() },
                 ]);
             },
         };
@@ -97,10 +101,35 @@ function App() {
         setRtcWrapper({ ref: rtcWrapper.ref });
     }
 
-    async function createOffer() {
-        if (createSendChannel) {
-            rtcWrapper.ref.createSendChannel('offerToAnswer');
+    function createDataChannel() {
+        rtcWrapper.ref.createDataChannel('the-one-and-only');
+        setRtcWrapper({ ref: rtcWrapper.ref });
+    }
+
+    async function createStreamTrack() {
+        setMediaStreamLoading(true);
+
+        const localStream = await navigator.mediaDevices.getUserMedia({
+            // audio: true,
+            video: videoSize,
+        });
+        const track = localStream.getTracks()[0];
+        consumeStreamTrack(localVideo, track);
+
+        await rtcWrapper.ref.addUserMediaTrack(track);
+
+        setMediaStreamLoading(false);
+        setRtcWrapper({ ref: rtcWrapper.ref });
+    }
+
+    function consumeStreamTrack(elementRef: RefObject<HTMLVideoElement>, track: MediaStreamTrack) {
+        if (elementRef.current) {
+            elementRef.current.srcObject = new MediaStream([track]);
+            elementRef.current.play();
         }
+    }
+
+    async function createOffer() {
         await rtcWrapper.ref.createOffer();
         updateEventsAndRTCHandlers(connectionEvents, [
             {
@@ -112,9 +141,6 @@ function App() {
     }
 
     async function createAnswer() {
-        if (createSendChannel) {
-            rtcWrapper.ref.createSendChannel('answerToOffer');
-        }
         await rtcWrapper.ref.createAnswer();
         updateEventsAndRTCHandlers(connectionEvents, [
             {
@@ -145,6 +171,26 @@ function App() {
         setHasAddedRemoteCandidates(true);
     }
 
+    function closeConnection() {
+        rtcWrapper.ref.closeConnection();
+
+        if (localVideo.current) {
+            localVideo.current.srcObject = null;
+        }
+
+        if (remoteVideo.current) {
+            remoteVideo.current.srcObject = null;
+        }
+
+        updateEventsAndRTCHandlers(connectionEvents, [
+            {
+                content: 'Connection closed by local peer',
+                isPseudoEvent: true,
+                timestamp: new Date(),
+            },
+        ]);
+    }
+
     function clear() {
         rtcWrapper.ref.clear();
 
@@ -156,10 +202,12 @@ function App() {
     }
 
     const disableInitialize = !!rtcWrapper.ref.connection;
-    const disableCreateOffer = !rtcWrapper.ref.isNewStatus;
+    const disableCreateDataChannel = !rtcWrapper.ref.isNewStatus || !!rtcWrapper.ref.dataChannel;
+    const disableCreateStream =
+        mediaStreamLoading || !!rtcWrapper.ref.localTrack || !rtcWrapper.ref.isNewStatus;
+    const disableCreateOffer =
+        !rtcWrapper.ref.isNewStatus || (!rtcWrapper.ref.dataChannel && !rtcWrapper.ref.localTrack);
     const disableCreateAnswer = !rtcWrapper.ref.hasRemoteOffer || !hasAddedRemoteCandidates;
-    const disableCreateSendChannel =
-        !!rtcWrapper.ref.sessionInit || (disableCreateOffer && disableCreateAnswer);
     const disableSetLocalDescription =
         !rtcWrapper.ref.sessionInit ||
         (!rtcWrapper.ref.isNewStatus && !rtcWrapper.ref.hasRemoteOffer);
@@ -170,30 +218,34 @@ function App() {
     const disableSetRemoteICECandidates =
         hasAddedRemoteCandidates || !!rtcWrapper.ref.sessionInit || !rtcWrapper.ref.hasRemoteOffer;
     const disableCloseConnection = !rtcWrapper.ref.isConnectedStatus;
-    const disableSend = !rtcWrapper.ref.isConnectedStatus || !rtcWrapper.ref.sendChannel;
-    const disableCloseReceive = !rtcWrapper.ref.isConnectedStatus || !rtcWrapper.ref.receiveChannel;
+    const disableSendData = !rtcWrapper.ref.isConnectedStatus || !rtcWrapper.ref.dataChannel;
     const disableClear = !rtcWrapper.ref.isClosedStatus;
 
-    const displayChannelWarning =
-        !disableCreateSendChannel && rtcWrapper.ref.isNewStatus && !createSendChannel;
-    const displaySignalingInstructions = rtcWrapper.ref.hasLocalOffer;
+    const displaySessionInstructions =
+        rtcWrapper.ref.hasLocalOffer || rtcWrapper.ref.awaitingAnswerAcceptance;
+    const displayICECandidatesInstructions = rtcWrapper.ref.hasLocalOffer;
 
     return (
         <div>
             <div>
                 <h2>Setup</h2>
-
                 <p>
                     <button onClick={initialize} disabled={disableInitialize}>
                         Initialize
                     </button>
                 </p>
-
                 <p>
                     Connection status: {rtcWrapper.ref.connection?.connectionState || '-'} /{' '}
                     {rtcWrapper.ref.connection?.signalingState || '-'}
                 </p>
-
+                <button onClick={createDataChannel} disabled={disableCreateDataChannel}>
+                    Create data channel
+                </button>
+                &emsp;
+                <button onClick={createStreamTrack} disabled={disableCreateStream}>
+                    Create video/audio stream
+                </button>
+                {mediaStreamLoading && ' ⌛️'}
                 <div>
                     <span>Local session</span>
                     <br />
@@ -207,7 +259,7 @@ function App() {
                                 : ''
                         }
                     ></textarea>
-                    {displaySignalingInstructions && (
+                    {displaySessionInstructions && (
                         <React.Fragment>
                             <br />
                             <span style={{ color: 'lightblue' }}>
@@ -230,7 +282,7 @@ function App() {
                                 : ''
                         }
                     ></textarea>
-                    {displaySignalingInstructions && (
+                    {displayICECandidatesInstructions && (
                         <React.Fragment>
                             <br />
                             <span style={{ color: 'lightblue' }}>
@@ -242,15 +294,6 @@ function App() {
                         </React.Fragment>
                     )}
                     <br />
-                    <input
-                        type="checkbox"
-                        checked={createSendChannel}
-                        onChange={() => {
-                            setCreateSendChannel(!createSendChannel);
-                        }}
-                        disabled={disableCreateSendChannel}
-                    />
-                    Create send channel&emsp;
                     <button onClick={createOffer} disabled={disableCreateOffer}>
                         Create offer
                     </button>
@@ -263,12 +306,6 @@ function App() {
                         Set local description
                     </button>
                     <br />
-                    {displayChannelWarning && (
-                        <p style={{ color: 'red' }}>
-                            ❗️ Creating an offer without having created a data channel first will
-                            NOT generate ICE Candidates, thus preventing the connection.
-                        </p>
-                    )}
                     <br />
                     <span>Remote session</span>
                     <br />
@@ -314,6 +351,32 @@ function App() {
             </div>
 
             <div>
+                <h2>Video/Voice</h2>
+                <div style={{ display: 'flex', justifyContent: 'space-around', flexWrap: 'wrap' }}>
+                    <video
+                        ref={localVideo}
+                        style={{
+                            backgroundColor: 'lightgrey',
+                            marginBottom: 8,
+                            maxHeight: '53.44vw',
+                            maxWidth: '95vw',
+                            ...videoSize,
+                        }}
+                    />
+                    <video
+                        ref={remoteVideo}
+                        style={{
+                            backgroundColor: 'lightgrey',
+                            marginBottom: 8,
+                            maxHeight: '53.44vw',
+                            maxWidth: '95vw',
+                            ...videoSize,
+                        }}
+                    />
+                </div>
+            </div>
+
+            <div>
                 <h2>Messages</h2>
                 <textarea
                     rows={5}
@@ -322,11 +385,11 @@ function App() {
                     onChange={(event) => {
                         setMessage(event.target.value);
                     }}
-                    disabled={disableSend}
+                    disabled={disableSendData}
                 ></textarea>
                 <button
                     onClick={() => {
-                        rtcWrapper.ref.sendChannel!.send(message);
+                        rtcWrapper.ref.dataChannel!.send(message);
                         setMessage('');
 
                         updateEventsAndRTCHandlers(connectionEvents, [
@@ -337,42 +400,21 @@ function App() {
                             },
                         ]);
                     }}
-                    disabled={disableSend}
+                    disabled={disableSendData}
                 >
                     Send
                 </button>
                 &emsp;
                 <button
                     onClick={() => {
-                        rtcWrapper.ref.sendChannel!.close();
+                        rtcWrapper.ref.dataChannel!.close();
                     }}
-                    disabled={disableSend}
+                    disabled={disableSendData}
                 >
-                    Close sending channel
+                    Close data channel
                 </button>
                 &emsp;
-                <button
-                    onClick={() => {
-                        rtcWrapper.ref.receiveChannel!.close();
-                    }}
-                    disabled={disableCloseReceive}
-                >
-                    Close receiving channel
-                </button>
-                &emsp;
-                <button
-                    onClick={() => {
-                        rtcWrapper.ref.closeConnection();
-                        updateEventsAndRTCHandlers(connectionEvents, [
-                            {
-                                content: 'Connection closed by local peer',
-                                isPseudoEvent: true,
-                                timestamp: new Date(),
-                            },
-                        ]);
-                    }}
-                    disabled={disableCloseConnection}
-                >
+                <button onClick={closeConnection} disabled={disableCloseConnection}>
                     Close connection
                 </button>
                 &emsp;
