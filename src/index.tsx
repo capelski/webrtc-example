@@ -3,10 +3,6 @@ import * as ReactDOMClient from 'react-dom/client';
 import { videoSize } from './constants';
 import { RTCWrapper, RTCWrapperHandlers } from './rtc-wrapper';
 
-// TODO Create video on answer only when the connection has stream
-// TODO Allow toggling data channel creation upon connection established?
-// TODO Allow toggling video stream creation upon connection established?
-
 type RTCEvent = {
     content: string;
     isPseudoEvent?: boolean;
@@ -81,7 +77,7 @@ function App() {
                     { content: `Signaling state change: ${event.detail}`, timestamp: new Date() },
                 ]);
             },
-            onTrack: () => {
+            onTrackAdded: () => {
                 consumeStreamTrack(remoteVideo, rtcWrapper.ref!.remoteTrack!);
                 updateEventsAndRTCHandlers(nextConnectionEvents, [
                     { content: `Media stream opened`, timestamp: new Date() },
@@ -171,6 +167,22 @@ function App() {
         setHasAddedRemoteCandidates(true);
     }
 
+    function closeLocalTrack() {
+        rtcWrapper.ref.closeLocalTrack();
+        if (localVideo.current) {
+            localVideo.current.srcObject = null;
+        }
+        setRtcWrapper({ ref: rtcWrapper.ref });
+    }
+
+    function closeRemoteTrack() {
+        rtcWrapper.ref.closeRemoteTrack();
+        if (remoteVideo.current) {
+            remoteVideo.current.srcObject = null;
+        }
+        setRtcWrapper({ ref: rtcWrapper.ref });
+    }
+
     function closeConnection() {
         rtcWrapper.ref.closeConnection();
 
@@ -243,7 +255,7 @@ function App() {
                 </button>
                 &emsp;
                 <button onClick={createStreamTrack} disabled={disableCreateStream}>
-                    Create video/audio stream
+                    Create video stream
                 </button>
                 {mediaStreamLoading && ' ⌛️'}
                 <div>
@@ -353,26 +365,38 @@ function App() {
             <div>
                 <h2>Video/Voice</h2>
                 <div style={{ display: 'flex', justifyContent: 'space-around', flexWrap: 'wrap' }}>
-                    <video
-                        ref={localVideo}
-                        style={{
-                            backgroundColor: 'lightgrey',
-                            marginBottom: 8,
-                            maxHeight: '53.44vw',
-                            maxWidth: '95vw',
-                            ...videoSize,
-                        }}
-                    />
-                    <video
-                        ref={remoteVideo}
-                        style={{
-                            backgroundColor: 'lightgrey',
-                            marginBottom: 8,
-                            maxHeight: '53.44vw',
-                            maxWidth: '95vw',
-                            ...videoSize,
-                        }}
-                    />
+                    <div>
+                        <video
+                            ref={localVideo}
+                            style={{
+                                backgroundColor: 'lightgrey',
+                                marginBottom: 8,
+                                maxHeight: '53.44vw',
+                                maxWidth: '95vw',
+                                ...videoSize,
+                            }}
+                        />
+                        <br />
+                        <button onClick={closeLocalTrack} disabled={!rtcWrapper.ref.localTrack}>
+                            Close local video stream
+                        </button>
+                    </div>
+                    <div>
+                        <video
+                            ref={remoteVideo}
+                            style={{
+                                backgroundColor: 'lightgrey',
+                                marginBottom: 8,
+                                maxHeight: '53.44vw',
+                                maxWidth: '95vw',
+                                ...videoSize,
+                            }}
+                        />
+                        <br />
+                        <button onClick={closeRemoteTrack} disabled={!rtcWrapper.ref.remoteTrack}>
+                            Close remote video stream
+                        </button>
+                    </div>
                 </div>
             </div>
 

@@ -5,7 +5,7 @@ export enum RTCWrapperEvents {
     iceCandidate = 'onIceCandidate',
     messageReceived = 'onMessageReceived',
     signalingStateChange = 'onSignalingStateChange',
-    track = 'onTrack',
+    trackAdded = 'onTrackAdded',
 }
 
 export type RTCWrapperHandlers = {
@@ -15,7 +15,7 @@ export type RTCWrapperHandlers = {
     [RTCWrapperEvents.iceCandidate]: (event: CustomEvent<RTCIceCandidate>) => void;
     [RTCWrapperEvents.messageReceived]: (event: CustomEvent<string>) => void;
     [RTCWrapperEvents.signalingStateChange]: (event: CustomEvent<RTCSignalingState>) => void;
-    [RTCWrapperEvents.track]: (event: CustomEvent<MediaStreamTrack>) => void;
+    [RTCWrapperEvents.trackAdded]: (event: CustomEvent<MediaStreamTrack>) => void;
 };
 
 export class RTCWrapper {
@@ -76,7 +76,7 @@ export class RTCWrapper {
             this.remoteTrack = event.track;
 
             this.events.dispatchEvent(
-                new CustomEvent(RTCWrapperEvents.track, {
+                new CustomEvent(RTCWrapperEvents.trackAdded, {
                     detail: this.remoteTrack,
                 }),
             );
@@ -226,22 +226,35 @@ export class RTCWrapper {
         return this.sessionInit;
     }
 
+    closeDataChannel() {
+        if (this.dataChannel) {
+            this.dataChannel.close();
+            this.dataChannel = undefined;
+        }
+    }
+
+    closeLocalTrack() {
+        if (this.localTrack) {
+            this.localTrack.stop();
+            this.localTrack = undefined;
+        }
+    }
+
+    closeRemoteTrack() {
+        if (this.remoteTrack) {
+            this.remoteTrack.stop();
+            this.remoteTrack = undefined;
+        }
+    }
+
     async closeConnection() {
         if (!this.connection) {
             throw new Error("The RTC connection hasn't been initialized");
         }
 
-        if (this.dataChannel) {
-            this.dataChannel.close();
-        }
-
-        if (this.localTrack) {
-            this.localTrack.stop();
-        }
-
-        if (this.remoteTrack) {
-            this.remoteTrack.stop();
-        }
+        this.closeDataChannel();
+        this.closeLocalTrack();
+        this.closeRemoteTrack();
 
         this.connection.close();
     }
