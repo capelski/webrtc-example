@@ -218,7 +218,10 @@ function App() {
     const disableCreateStream =
         mediaStreamLoading ||
         !!rtcWrapper.ref.localTrack ||
-        (!rtcWrapper.ref.isNewStatus && !rtcWrapper.ref.hasRemoteOffer);
+        !(
+            rtcWrapper.ref.isNewStatus ||
+            (rtcWrapper.ref.hasRemoteOffer && hasAddedRemoteCandidates)
+        );
     const disableCreateOffer =
         !rtcWrapper.ref.isNewStatus || (!rtcWrapper.ref.dataChannel && !rtcWrapper.ref.localTrack);
     const disableCreateAnswer = !rtcWrapper.ref.hasRemoteOffer || !hasAddedRemoteCandidates;
