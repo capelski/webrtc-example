@@ -93,7 +93,7 @@ function App() {
                 }
 
                 updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    { content: `Stream track opened`, timestamp: new Date() },
+                    { content: `Remote stream track added`, timestamp: new Date() },
                 ]);
             },
         };
