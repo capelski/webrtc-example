@@ -27,8 +27,6 @@ export class RTCWrapper {
     public iceCandidates: RTCIceCandidate[] = [];
 
     public dataChannel?: RTCDataChannel;
-    public localTrack?: MediaStreamTrack;
-    public remoteTrack?: MediaStreamTrack;
 
     constructor() {
         this.events = new EventTarget();
@@ -73,11 +71,9 @@ export class RTCWrapper {
 
         // This method will be called when the peer adds a stream track
         this.connection.ontrack = (event) => {
-            this.remoteTrack = event.track;
-
             this.events.dispatchEvent(
                 new CustomEvent(RTCWrapperEvents.trackAdded, {
-                    detail: this.remoteTrack,
+                    detail: event.track,
                 }),
             );
         };
@@ -171,13 +167,14 @@ export class RTCWrapper {
         this.processDataChannel(this.dataChannel);
     }
 
-    async addUserMediaTrack(track: MediaStreamTrack) {
+    async addUserMediaTracks(tracks: MediaStreamTrack[]) {
         if (!this.connection) {
             throw new Error("The RTC connection hasn't been initialized");
         }
 
-        this.localTrack = track;
-        this.connection.addTrack(track);
+        tracks.forEach((track) => {
+            return this.connection!.addTrack(track);
+        });
     }
 
     async createOffer() {
@@ -227,34 +224,13 @@ export class RTCWrapper {
     }
 
     closeDataChannel() {
-        if (this.dataChannel) {
-            this.dataChannel.close();
-            this.dataChannel = undefined;
-        }
-    }
-
-    closeLocalTrack() {
-        if (this.localTrack) {
-            this.localTrack.stop();
-            this.localTrack = undefined;
-        }
-    }
-
-    closeRemoteTrack() {
-        if (this.remoteTrack) {
-            this.remoteTrack.stop();
-            this.remoteTrack = undefined;
-        }
+        this.dataChannel?.close();
     }
 
     async closeConnection() {
         if (!this.connection) {
             throw new Error("The RTC connection hasn't been initialized");
         }
-
-        this.closeDataChannel();
-        this.closeLocalTrack();
-        this.closeRemoteTrack();
 
         this.connection.close();
     }
@@ -284,10 +260,6 @@ export class RTCWrapper {
         this.connection = undefined;
         this.sessionInit = undefined;
         this.iceCandidates = [];
-
-        this.dataChannel = undefined;
-        this.localTrack = undefined;
-        this.remoteTrack = undefined;
 
         this.unsetEventHandlers();
         this.handlers = undefined;

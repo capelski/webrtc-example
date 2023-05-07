@@ -3,6 +3,8 @@ import * as ReactDOMClient from 'react-dom/client';
 import { videoSize } from './constants';
 import { RTCWrapper, RTCWrapperHandlers } from './rtc-wrapper';
 
+// TODO Add link to medium article
+
 type RTCEvent = {
     content: string;
     isPseudoEvent?: boolean;
@@ -12,14 +14,16 @@ type RTCEvent = {
 function App() {
     const [connectionEvents, setConnectionEvents] = useState<RTCEvent[]>([]);
     const [hasAddedRemoteCandidates, setHasAddedRemoteCandidates] = useState(false);
-    const [mediaStreamLoading, setMediaStreamLoading] = useState(false);
+    const [localMediaStream, setLocalMediaStream] = useState<MediaStream>();
+    const [localMediaStreamLoading, setLocalMediaStreamLoading] = useState(false);
     const [message, setMessage] = useState('');
-    const [remoteSessionInit, setRemoteSessionInit] = useState('');
     const [remoteIceCandidates, setRemoteIceCandidates] = useState('');
+    const [remoteMediaStream, setRemoteMediaStream] = useState<MediaStream>();
+    const [remoteSessionInit, setRemoteSessionInit] = useState('');
     const [rtcWrapper, setRtcWrapper] = useState<{ ref: RTCWrapper }>({ ref: new RTCWrapper() });
 
-    const localVideo = useRef<HTMLVideoElement>(null);
-    const remoteVideo = useRef<HTMLVideoElement>(null);
+    const localVideoRef = useRef<HTMLVideoElement>(null);
+    const remoteVideoRef = useRef<HTMLVideoElement>(null);
 
     function updateEventsAndRTCHandlers(
         currentConnectionEvents: RTCEvent[],
@@ -77,10 +81,19 @@ function App() {
                     { content: `Signaling state change: ${event.detail}`, timestamp: new Date() },
                 ]);
             },
-            onTrackAdded: () => {
-                consumeStreamTrack(remoteVideo, rtcWrapper.ref!.remoteTrack!);
+            onTrackAdded: (event) => {
+                let nextRemoteMediaStream = remoteMediaStream;
+
+                if (!nextRemoteMediaStream) {
+                    nextRemoteMediaStream = new MediaStream([event.detail]);
+                    setRemoteMediaStream(nextRemoteMediaStream);
+                    playMediaStream(remoteVideoRef, nextRemoteMediaStream);
+                } else {
+                    nextRemoteMediaStream.addTrack(event.detail);
+                }
+
                 updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    { content: `Media stream opened`, timestamp: new Date() },
+                    { content: `Stream track opened`, timestamp: new Date() },
                 ]);
             },
         };
@@ -103,24 +116,24 @@ function App() {
     }
 
     async function createStreamTrack() {
-        setMediaStreamLoading(true);
+        setLocalMediaStreamLoading(true);
 
-        const localStream = await navigator.mediaDevices.getUserMedia({
-            // audio: true,
+        const mediaStream = await navigator.mediaDevices.getUserMedia({
+            // audio: true, // Disabled to prevent microphone feedback on same machine connections
             video: videoSize,
         });
-        const track = localStream.getTracks()[0];
-        consumeStreamTrack(localVideo, track);
+        playMediaStream(localVideoRef, mediaStream);
 
-        await rtcWrapper.ref.addUserMediaTrack(track);
+        await rtcWrapper.ref.addUserMediaTracks(mediaStream.getTracks());
 
-        setMediaStreamLoading(false);
+        setLocalMediaStream(mediaStream);
+        setLocalMediaStreamLoading(false);
         setRtcWrapper({ ref: rtcWrapper.ref });
     }
 
-    function consumeStreamTrack(elementRef: RefObject<HTMLVideoElement>, track: MediaStreamTrack) {
+    function playMediaStream(elementRef: RefObject<HTMLVideoElement>, mediaStream: MediaStream) {
         if (elementRef.current) {
-            elementRef.current.srcObject = new MediaStream([track]);
+            elementRef.current.srcObject = mediaStream;
             elementRef.current.play();
         }
     }
@@ -167,32 +180,41 @@ function App() {
         setHasAddedRemoteCandidates(true);
     }
 
-    function closeLocalTrack() {
-        rtcWrapper.ref.closeLocalTrack();
-        if (localVideo.current) {
-            localVideo.current.srcObject = null;
-        }
-        setRtcWrapper({ ref: rtcWrapper.ref });
+    function closeDataChannel() {
+        rtcWrapper.ref.closeDataChannel();
     }
 
-    function closeRemoteTrack() {
-        rtcWrapper.ref.closeRemoteTrack();
-        if (remoteVideo.current) {
-            remoteVideo.current.srcObject = null;
+    function stopMediaStream(
+        elementRef: RefObject<HTMLVideoElement>,
+        mediaStream: MediaStream | undefined,
+        mediaStreamSetter: (mediaStream: MediaStream | undefined) => void,
+    ) {
+        if (mediaStream) {
+            mediaStream.getTracks().forEach((track) => {
+                track.stop();
+            });
+
+            if (elementRef.current) {
+                elementRef.current.srcObject = null;
+            }
+
+            mediaStreamSetter(undefined);
         }
-        setRtcWrapper({ ref: rtcWrapper.ref });
+    }
+
+    function stopLocalMediaStream() {
+        stopMediaStream(localVideoRef, localMediaStream, setLocalMediaStream);
+    }
+
+    function stopRemoteMediaStream() {
+        stopMediaStream(remoteVideoRef, remoteMediaStream, setRemoteMediaStream);
     }
 
     function closeConnection() {
+        stopLocalMediaStream();
+        stopRemoteMediaStream();
+
         rtcWrapper.ref.closeConnection();
-
-        if (localVideo.current) {
-            localVideo.current.srcObject = null;
-        }
-
-        if (remoteVideo.current) {
-            remoteVideo.current.srcObject = null;
-        }
 
         updateEventsAndRTCHandlers(connectionEvents, [
             {
@@ -207,6 +229,7 @@ function App() {
         rtcWrapper.ref.clear();
 
         setConnectionEvents([]);
+        setHasAddedRemoteCandidates(false);
         setMessage('');
         setRemoteIceCandidates('');
         setRemoteSessionInit('');
@@ -216,14 +239,14 @@ function App() {
     const disableInitialize = !!rtcWrapper.ref.connection;
     const disableCreateDataChannel = !rtcWrapper.ref.isNewStatus || !!rtcWrapper.ref.dataChannel;
     const disableCreateStream =
-        mediaStreamLoading ||
-        !!rtcWrapper.ref.localTrack ||
+        localMediaStreamLoading ||
+        !!localMediaStream ||
         !(
             rtcWrapper.ref.isNewStatus ||
             (rtcWrapper.ref.hasRemoteOffer && hasAddedRemoteCandidates)
         );
     const disableCreateOffer =
-        !rtcWrapper.ref.isNewStatus || (!rtcWrapper.ref.dataChannel && !rtcWrapper.ref.localTrack);
+        !rtcWrapper.ref.isNewStatus || (!rtcWrapper.ref.dataChannel && !localMediaStream);
     const disableCreateAnswer = !rtcWrapper.ref.hasRemoteOffer || !hasAddedRemoteCandidates;
     const disableSetLocalDescription =
         !rtcWrapper.ref.sessionInit ||
@@ -260,9 +283,9 @@ function App() {
                 </button>
                 &emsp;
                 <button onClick={createStreamTrack} disabled={disableCreateStream}>
-                    Create video stream
+                    Create media stream
                 </button>
-                {mediaStreamLoading && ' ⌛️'}
+                {localMediaStreamLoading && ' ⌛️'}
                 <div>
                     <span>Local session</span>
                     <br />
@@ -368,11 +391,11 @@ function App() {
             </div>
 
             <div>
-                <h2>Video/Voice</h2>
+                <h2>Media</h2>
                 <div style={{ display: 'flex', justifyContent: 'space-around', flexWrap: 'wrap' }}>
-                    <div>
+                    <div style={{ marginBottom: 8 }}>
                         <video
-                            ref={localVideo}
+                            ref={localVideoRef}
                             style={{
                                 backgroundColor: 'lightgrey',
                                 marginBottom: 8,
@@ -382,24 +405,23 @@ function App() {
                             }}
                         />
                         <br />
-                        <button onClick={closeLocalTrack} disabled={!rtcWrapper.ref.localTrack}>
-                            Close local video stream
+                        <button onClick={stopLocalMediaStream} disabled={!localMediaStream}>
+                            Stop local media stream
                         </button>
                     </div>
-                    <div>
+                    <div style={{ marginBottom: 8 }}>
                         <video
-                            ref={remoteVideo}
+                            ref={remoteVideoRef}
                             style={{
                                 backgroundColor: 'lightgrey',
-                                marginBottom: 8,
                                 maxHeight: '53.44vw',
                                 maxWidth: '95vw',
                                 ...videoSize,
                             }}
                         />
                         <br />
-                        <button onClick={closeRemoteTrack} disabled={!rtcWrapper.ref.remoteTrack}>
-                            Close remote video stream
+                        <button onClick={stopRemoteMediaStream} disabled={!remoteMediaStream}>
+                            Stop remote media stream
                         </button>
                     </div>
                 </div>
@@ -434,15 +456,13 @@ function App() {
                     Send
                 </button>
                 &emsp;
-                <button
-                    onClick={() => {
-                        rtcWrapper.ref.dataChannel!.close();
-                    }}
-                    disabled={disableSendData}
-                >
+                <button onClick={closeDataChannel} disabled={disableSendData}>
                     Close data channel
                 </button>
-                &emsp;
+            </div>
+
+            <div>
+                <h2>Tear down</h2>
                 <button onClick={closeConnection} disabled={disableCloseConnection}>
                     Close connection
                 </button>
