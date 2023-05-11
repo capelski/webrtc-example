@@ -2,20 +2,20 @@ export enum RTCWrapperEvents {
     connectionStateChange = 'onConnectionStateChange',
     dataChannelClosed = 'onDataChannelClosed',
     dataChannelOpened = 'onDataChannelOpened',
-    iceCandidate = 'onIceCandidate',
+    localIceCandidate = 'onLocalIceCandidate',
     messageReceived = 'onMessageReceived',
+    remoteTrackAdded = 'onRemoteTrackAdded',
     signalingStateChange = 'onSignalingStateChange',
-    trackAdded = 'onTrackAdded',
 }
 
 export type RTCWrapperHandlers = {
     [RTCWrapperEvents.connectionStateChange]: (event: CustomEvent<RTCPeerConnectionState>) => void;
     [RTCWrapperEvents.dataChannelClosed]: (event: CustomEvent<RTCDataChannel>) => void;
     [RTCWrapperEvents.dataChannelOpened]: (event: CustomEvent<RTCDataChannel>) => void;
-    [RTCWrapperEvents.iceCandidate]: (event: CustomEvent<RTCIceCandidate>) => void;
+    [RTCWrapperEvents.localIceCandidate]: (event: CustomEvent<RTCIceCandidate>) => void;
     [RTCWrapperEvents.messageReceived]: (event: CustomEvent<string>) => void;
+    [RTCWrapperEvents.remoteTrackAdded]: (event: CustomEvent<MediaStreamTrack>) => void;
     [RTCWrapperEvents.signalingStateChange]: (event: CustomEvent<RTCSignalingState>) => void;
-    [RTCWrapperEvents.trackAdded]: (event: CustomEvent<MediaStreamTrack>) => void;
 };
 
 export class RTCWrapper {
@@ -56,7 +56,7 @@ export class RTCWrapper {
                 // The event.candidate must be added by the peer answering the connection
                 this.iceCandidates.push(event.candidate);
                 this.events.dispatchEvent(
-                    new CustomEvent(RTCWrapperEvents.iceCandidate, {
+                    new CustomEvent(RTCWrapperEvents.localIceCandidate, {
                         detail: event.candidate,
                     }),
                 );
@@ -72,7 +72,7 @@ export class RTCWrapper {
         // This method will be called when the peer adds a stream track
         this.connection.ontrack = (event) => {
             this.events.dispatchEvent(
-                new CustomEvent(RTCWrapperEvents.trackAdded, {
+                new CustomEvent(RTCWrapperEvents.remoteTrackAdded, {
                     detail: event.track,
                 }),
             );
@@ -227,7 +227,7 @@ export class RTCWrapper {
         this.dataChannel?.close();
     }
 
-    async closeConnection() {
+    closeConnection() {
         if (!this.connection) {
             throw new Error("The RTC connection hasn't been initialized");
         }

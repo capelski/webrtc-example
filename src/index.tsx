@@ -1,54 +1,66 @@
-import React, { RefObject, useRef, useState } from 'react';
+import React, { RefObject, useMemo, useRef, useState } from 'react';
 import * as ReactDOMClient from 'react-dom/client';
 import { videoSize } from './constants';
+import {
+    RTCEvent,
+    RTCRelatedState,
+    RTCRelatedStateUpdate,
+    getInitialRtcRelatedState,
+    getNextRTCRelatedState,
+} from './rtc-related-state';
 import { RTCWrapper, RTCWrapperHandlers } from './rtc-wrapper';
 
 // TODO Add link to medium article
 
-type RTCEvent = {
-    content: string;
-    isPseudoEvent?: boolean;
-    timestamp: Date;
-};
-
 function App() {
-    const [connectionEvents, setConnectionEvents] = useState<RTCEvent[]>([]);
+    const rtcWrapper = useMemo(() => new RTCWrapper(), []);
+
     const [hasAddedRemoteCandidates, setHasAddedRemoteCandidates] = useState(false);
-    const [localMediaStream, setLocalMediaStream] = useState<MediaStream>();
     const [localMediaStreamLoading, setLocalMediaStreamLoading] = useState(false);
     const [message, setMessage] = useState('');
     const [remoteIceCandidates, setRemoteIceCandidates] = useState('');
-    const [remoteMediaStream, setRemoteMediaStream] = useState<MediaStream>();
     const [remoteSessionInit, setRemoteSessionInit] = useState('');
-    const [rtcWrapper, setRtcWrapper] = useState<{ ref: RTCWrapper }>({ ref: new RTCWrapper() });
+    const [rtcRelatedState, setRtcRelatedState] = useState<RTCRelatedState>(
+        getInitialRtcRelatedState(),
+    );
+
+    const [, forceUpdate] = useState({});
 
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
 
-    function updateEventsAndRTCHandlers(
-        currentConnectionEvents: RTCEvent[],
-        newConnectionEvents: RTCEvent[] = [],
-    ) {
-        const nextConnectionEvents = newConnectionEvents.concat(currentConnectionEvents);
+    function updateRtcEvents(currentRtcRelatedState: RTCRelatedState, newEvents: RTCEvent[]) {
+        updateRtcRelatedState(currentRtcRelatedState, { newEvents });
+    }
 
+    function updateRtcRelatedState(
+        currentRtcRelatedState: RTCRelatedState,
+        stateUpdates: RTCRelatedStateUpdate,
+    ) {
+        const nextRtcRelatedState = getNextRTCRelatedState(currentRtcRelatedState, stateUpdates);
+        setRtcRelatedState(nextRtcRelatedState);
+        updateRtcHandlers(nextRtcRelatedState);
+    }
+
+    function updateRtcHandlers(currentRtcRelatedState: RTCRelatedState) {
         const handlers: RTCWrapperHandlers = {
             onConnectionStateChange: (event) => {
                 const newEvents: RTCEvent[] = [
                     { content: `Connection state change: ${event.detail}`, timestamp: new Date() },
                 ];
+
                 if (event.detail === 'disconnected') {
                     // Connection was closed by the remote peer; the app state must be updated on this peer
-                    closeConnection();
-                    newEvents.unshift({
-                        content: 'Connection closed by remote peer',
-                        isPseudoEvent: true,
-                        timestamp: new Date(),
+                    const nextRtcRelatedState = getNextRTCRelatedState(currentRtcRelatedState, {
+                        newEvents,
                     });
+                    closeConnection(nextRtcRelatedState, 'remote');
+                } else {
+                    updateRtcEvents(currentRtcRelatedState, newEvents);
                 }
-                updateEventsAndRTCHandlers(nextConnectionEvents, newEvents);
             },
             onDataChannelClosed: (event) => {
-                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                updateRtcEvents(currentRtcRelatedState, [
                     {
                         content: `Data channel closed: ${event.detail.label}`,
                         timestamp: new Date(),
@@ -56,15 +68,15 @@ function App() {
                 ]);
             },
             onDataChannelOpened: (event) => {
-                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                updateRtcEvents(currentRtcRelatedState, [
                     {
                         content: `Data channel opened: ${event.detail.label}`,
                         timestamp: new Date(),
                     },
                 ]);
             },
-            onIceCandidate: (event) => {
-                updateEventsAndRTCHandlers(nextConnectionEvents, [
+            onLocalIceCandidate: (event) => {
+                updateRtcEvents(currentRtcRelatedState, [
                     {
                         content: `ICE candidate generated: ${event.detail.address}`,
                         timestamp: new Date(),
@@ -72,77 +84,112 @@ function App() {
                 ]);
             },
             onMessageReceived: (event) => {
-                updateEventsAndRTCHandlers(nextConnectionEvents, [
+                updateRtcEvents(currentRtcRelatedState, [
                     { content: `Message received: ${event.detail}`, timestamp: new Date() },
                 ]);
             },
-            onSignalingStateChange: (event) => {
-                updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    { content: `Signaling state change: ${event.detail}`, timestamp: new Date() },
-                ]);
-            },
-            onTrackAdded: (event) => {
-                let nextRemoteMediaStream = remoteMediaStream;
+            onRemoteTrackAdded: (event) => {
+                let nextRemoteMediaStream: MediaStream;
 
-                if (!nextRemoteMediaStream) {
+                if (!currentRtcRelatedState.remoteMediaStream) {
                     nextRemoteMediaStream = new MediaStream([event.detail]);
-                    setRemoteMediaStream(nextRemoteMediaStream);
                     playMediaStream(remoteVideoRef, nextRemoteMediaStream);
                 } else {
+                    nextRemoteMediaStream = currentRtcRelatedState.remoteMediaStream;
                     nextRemoteMediaStream.addTrack(event.detail);
                 }
 
-                updateEventsAndRTCHandlers(nextConnectionEvents, [
-                    { content: `Remote stream track added`, timestamp: new Date() },
+                updateRtcRelatedState(currentRtcRelatedState, {
+                    newEvents: [
+                        {
+                            content: `Remote ${event.detail.kind} stream track added`,
+                            timestamp: new Date(),
+                        },
+                    ],
+                    remoteMediaStream: nextRemoteMediaStream,
+                });
+            },
+            onSignalingStateChange: (event) => {
+                updateRtcEvents(currentRtcRelatedState, [
+                    {
+                        content: `Signaling state change: ${event.detail}`,
+                        timestamp: new Date(),
+                    },
                 ]);
             },
         };
 
-        rtcWrapper.ref.setEventHandlers(handlers);
-
-        setConnectionEvents(nextConnectionEvents);
-        setRtcWrapper({ ref: rtcWrapper.ref });
+        rtcWrapper.setEventHandlers(handlers);
     }
 
     function initialize() {
-        rtcWrapper.ref.initialize();
-        updateEventsAndRTCHandlers([]);
-        setRtcWrapper({ ref: rtcWrapper.ref });
+        rtcWrapper.initialize();
+
+        updateRtcEvents(rtcRelatedState, [
+            {
+                content: 'RTCPeerConnection object initialized',
+                isPseudoEvent: true,
+                timestamp: new Date(),
+            },
+        ]);
     }
 
     function createDataChannel() {
-        rtcWrapper.ref.createDataChannel('the-one-and-only');
-        setRtcWrapper({ ref: rtcWrapper.ref });
+        rtcWrapper.createDataChannel('the-one-and-only');
+        forceUpdate({});
     }
 
     async function createStreamTrack() {
         setLocalMediaStreamLoading(true);
 
-        const mediaStream = await navigator.mediaDevices.getUserMedia({
+        const localMediaStream = await navigator.mediaDevices.getUserMedia({
             // audio: true, // Disabled to prevent microphone feedback on same machine connections
             video: videoSize,
         });
-        playMediaStream(localVideoRef, mediaStream);
+        playMediaStream(localVideoRef, localMediaStream);
 
-        await rtcWrapper.ref.addUserMediaTracks(mediaStream.getTracks());
+        const tracks = localMediaStream.getTracks();
+        await rtcWrapper.addUserMediaTracks(tracks);
 
-        setLocalMediaStream(mediaStream);
         setLocalMediaStreamLoading(false);
-        setRtcWrapper({ ref: rtcWrapper.ref });
+        updateRtcRelatedState(rtcRelatedState, {
+            localMediaStream,
+            newEvents: tracks.map<RTCEvent>((track) => ({
+                content: `Local ${track.kind} stream track added`,
+                isPseudoEvent: true,
+                timestamp: new Date(),
+            })),
+        });
     }
 
-    function playMediaStream(elementRef: RefObject<HTMLVideoElement>, mediaStream: MediaStream) {
+    async function playMediaStream(
+        elementRef: RefObject<HTMLVideoElement>,
+        mediaStream: MediaStream,
+    ) {
         if (elementRef.current) {
             elementRef.current.srcObject = mediaStream;
-            elementRef.current.play();
+
+            try {
+                await elementRef.current.play();
+            } catch (error) {
+                // The following error is raised when a new track is added to a playing media
+                const isBenignError = error.message.includes(
+                    'The play() request was interrupted by a new load request',
+                );
+
+                if (!isBenignError) {
+                    throw error;
+                }
+            }
         }
     }
 
     async function createOffer() {
-        await rtcWrapper.ref.createOffer();
-        updateEventsAndRTCHandlers(connectionEvents, [
+        await rtcWrapper.createOffer();
+
+        updateRtcEvents(rtcRelatedState, [
             {
-                content: `Offer created: ${rtcWrapper.ref.sessionInit?.sdp?.substring(0, 15)}...`,
+                content: `Offer created: ${rtcWrapper.sessionInit?.sdp?.substring(0, 15)}...`,
                 isPseudoEvent: true,
                 timestamp: new Date(),
             },
@@ -150,10 +197,11 @@ function App() {
     }
 
     async function createAnswer() {
-        await rtcWrapper.ref.createAnswer();
-        updateEventsAndRTCHandlers(connectionEvents, [
+        await rtcWrapper.createAnswer();
+
+        updateRtcEvents(rtcRelatedState, [
             {
-                content: `Answer created: ${rtcWrapper.ref.sessionInit?.sdp?.substring(0, 15)}...`,
+                content: `Answer created: ${rtcWrapper.sessionInit?.sdp?.substring(0, 15)}...`,
                 isPseudoEvent: true,
                 timestamp: new Date(),
             },
@@ -161,109 +209,149 @@ function App() {
     }
 
     async function setLocalDescription() {
-        await rtcWrapper.ref.setLocalDescription();
+        await rtcWrapper.setLocalDescription();
+        // No need to forceUpdate, as RTCEvents will be triggered
     }
 
     async function setRemoteDescription() {
-        await rtcWrapper.ref.setRemoteDescription(JSON.parse(remoteSessionInit || '{}'));
+        await rtcWrapper.setRemoteDescription(JSON.parse(remoteSessionInit || '{}'));
+        // No need to forceUpdate, as RTCEvents will be triggered
     }
 
     async function setRemoteIceCandidatesHandler() {
-        await rtcWrapper.ref.setRemoteICECandidates(JSON.parse(remoteIceCandidates || '[]'));
-        updateEventsAndRTCHandlers(connectionEvents, [
+        await rtcWrapper.setRemoteICECandidates(JSON.parse(remoteIceCandidates || '[]'));
+
+        setHasAddedRemoteCandidates(true);
+        updateRtcEvents(rtcRelatedState, [
             {
                 content: `Remote ICE Candidates added`,
                 isPseudoEvent: true,
                 timestamp: new Date(),
             },
         ]);
-        setHasAddedRemoteCandidates(true);
     }
 
     function closeDataChannel() {
-        rtcWrapper.ref.closeDataChannel();
+        rtcWrapper.closeDataChannel();
+        // No need to forceUpdate, as RTCEvents will be triggered
     }
 
     function stopMediaStream(
         elementRef: RefObject<HTMLVideoElement>,
-        mediaStream: MediaStream | undefined,
-        mediaStreamSetter: (mediaStream: MediaStream | undefined) => void,
+        mediaStream: MediaStream | null,
+        label: string,
     ) {
+        let newEvents: RTCEvent[] = [];
+
+        if (elementRef.current) {
+            elementRef.current.srcObject = null;
+        }
+
         if (mediaStream) {
             mediaStream.getTracks().forEach((track) => {
                 track.stop();
             });
 
-            if (elementRef.current) {
-                elementRef.current.srcObject = null;
-            }
-
-            mediaStreamSetter(undefined);
+            newEvents = mediaStream
+                .getTracks()
+                .map<RTCEvent>((track) => ({
+                    content: `${label} ${track.kind} stream track ended`,
+                    isPseudoEvent: true,
+                    timestamp: new Date(),
+                }))
+                .reverse();
         }
+
+        return newEvents;
     }
 
     function stopLocalMediaStream() {
-        stopMediaStream(localVideoRef, localMediaStream, setLocalMediaStream);
+        const newEvents = stopMediaStream(localVideoRef, rtcRelatedState.localMediaStream, 'Local');
+
+        updateRtcRelatedState(rtcRelatedState, {
+            localMediaStream: null,
+            newEvents,
+        });
     }
 
     function stopRemoteMediaStream() {
-        stopMediaStream(remoteVideoRef, remoteMediaStream, setRemoteMediaStream);
+        const newEvents = stopMediaStream(
+            remoteVideoRef,
+            rtcRelatedState.remoteMediaStream,
+            'Remote',
+        );
+
+        updateRtcRelatedState(rtcRelatedState, {
+            newEvents,
+            remoteMediaStream: null,
+        });
     }
 
-    function closeConnection() {
-        stopLocalMediaStream();
-        stopRemoteMediaStream();
-
-        rtcWrapper.ref.closeConnection();
-
-        updateEventsAndRTCHandlers(connectionEvents, [
+    function closeConnection(currentRtcDrivenState: RTCRelatedState, label: string) {
+        const newEvents: RTCEvent[] = [
             {
-                content: 'Connection closed by local peer',
+                content: `Connection closed by ${label} peer`,
                 isPseudoEvent: true,
                 timestamp: new Date(),
             },
-        ]);
+        ];
+
+        const localMediaEvents = stopMediaStream(
+            localVideoRef,
+            currentRtcDrivenState.localMediaStream,
+            'Local',
+        );
+        const remoteMediaEvents = stopMediaStream(
+            remoteVideoRef,
+            currentRtcDrivenState.remoteMediaStream,
+            'Remote',
+        );
+
+        newEvents.unshift(...localMediaEvents, ...remoteMediaEvents);
+
+        rtcWrapper.closeConnection();
+
+        updateRtcRelatedState(currentRtcDrivenState, {
+            localMediaStream: null,
+            newEvents,
+            remoteMediaStream: null,
+        });
     }
 
     function clear() {
-        rtcWrapper.ref.clear();
+        rtcWrapper.clear();
 
-        setConnectionEvents([]);
         setHasAddedRemoteCandidates(false);
         setMessage('');
         setRemoteIceCandidates('');
         setRemoteSessionInit('');
-        setRtcWrapper({ ref: rtcWrapper.ref });
+        setRtcRelatedState(getInitialRtcRelatedState());
     }
 
-    const disableInitialize = !!rtcWrapper.ref.connection;
-    const disableCreateDataChannel = !rtcWrapper.ref.isNewStatus || !!rtcWrapper.ref.dataChannel;
+    const disableInitialize = !!rtcWrapper.connection;
+    const disableCreateDataChannel = !rtcWrapper.isNewStatus || !!rtcWrapper.dataChannel;
     const disableCreateStream =
         localMediaStreamLoading ||
-        !!localMediaStream ||
-        !(
-            rtcWrapper.ref.isNewStatus ||
-            (rtcWrapper.ref.hasRemoteOffer && hasAddedRemoteCandidates)
-        );
+        !!rtcRelatedState.localMediaStream ||
+        !(rtcWrapper.isNewStatus || (rtcWrapper.hasRemoteOffer && hasAddedRemoteCandidates));
     const disableCreateOffer =
-        !rtcWrapper.ref.isNewStatus || (!rtcWrapper.ref.dataChannel && !localMediaStream);
-    const disableCreateAnswer = !rtcWrapper.ref.hasRemoteOffer || !hasAddedRemoteCandidates;
+        !rtcWrapper.isNewStatus || (!rtcWrapper.dataChannel && !rtcRelatedState.localMediaStream);
+    const disableCreateAnswer = !rtcWrapper.hasRemoteOffer || !hasAddedRemoteCandidates;
     const disableSetLocalDescription =
-        !rtcWrapper.ref.sessionInit ||
-        (!rtcWrapper.ref.isNewStatus && !rtcWrapper.ref.hasRemoteOffer);
+        !rtcWrapper.sessionInit || (!rtcWrapper.isNewStatus && !rtcWrapper.hasRemoteOffer);
     const disableSetRemoteDescription = !(
-        (!rtcWrapper.ref.sessionInit && rtcWrapper.ref.isNewStatus) ||
-        (!!rtcWrapper.ref.sessionInit && rtcWrapper.ref.awaitingRemoteAnswer)
+        (!rtcWrapper.sessionInit && rtcWrapper.isNewStatus) ||
+        (!!rtcWrapper.sessionInit && rtcWrapper.awaitingRemoteAnswer)
     );
     const disableSetRemoteICECandidates =
-        hasAddedRemoteCandidates || !!rtcWrapper.ref.sessionInit || !rtcWrapper.ref.hasRemoteOffer;
-    const disableCloseConnection = !rtcWrapper.ref.isConnectedStatus;
-    const disableSendData = !rtcWrapper.ref.isConnectedStatus || !rtcWrapper.ref.dataChannel;
-    const disableClear = !rtcWrapper.ref.isClosedStatus;
+        hasAddedRemoteCandidates || !!rtcWrapper.sessionInit || !rtcWrapper.hasRemoteOffer;
+    const disableCloseConnection = !rtcWrapper.isConnectedStatus;
+    const disableSendData = !rtcWrapper.isConnectedStatus || !rtcWrapper.dataChannel;
+    const disableClear = !rtcWrapper.isClosedStatus;
 
     const displaySessionInstructions =
-        rtcWrapper.ref.hasLocalOffer || rtcWrapper.ref.awaitingAnswerAcceptance;
-    const displayICECandidatesInstructions = rtcWrapper.ref.hasLocalOffer;
+        rtcWrapper.hasLocalOffer || rtcWrapper.awaitingAnswerAcceptance;
+    const displayICECandidatesInstructions = rtcWrapper.hasLocalOffer;
 
     return (
         <div>
@@ -275,8 +363,8 @@ function App() {
                     </button>
                 </p>
                 <p>
-                    Connection status: {rtcWrapper.ref.connection?.connectionState || '-'} /{' '}
-                    {rtcWrapper.ref.connection?.signalingState || '-'}
+                    Connection status: {rtcWrapper.connection?.connectionState || '-'} /{' '}
+                    {rtcWrapper.connection?.signalingState || '-'}
                 </p>
                 <button onClick={createDataChannel} disabled={disableCreateDataChannel}>
                     Create data channel
@@ -293,11 +381,7 @@ function App() {
                         rows={5}
                         style={{ width: '100%' }}
                         disabled
-                        value={
-                            rtcWrapper.ref.sessionInit
-                                ? JSON.stringify(rtcWrapper.ref.sessionInit)
-                                : ''
-                        }
+                        value={rtcWrapper.sessionInit ? JSON.stringify(rtcWrapper.sessionInit) : ''}
                     ></textarea>
                     {displaySessionInstructions && (
                         <React.Fragment>
@@ -317,8 +401,8 @@ function App() {
                         style={{ width: '100%' }}
                         disabled
                         value={
-                            rtcWrapper.ref.iceCandidates?.length > 0
-                                ? JSON.stringify(rtcWrapper.ref.iceCandidates)
+                            rtcWrapper.iceCandidates?.length > 0
+                                ? JSON.stringify(rtcWrapper.iceCandidates)
                                 : ''
                         }
                     ></textarea>
@@ -405,7 +489,10 @@ function App() {
                             }}
                         />
                         <br />
-                        <button onClick={stopLocalMediaStream} disabled={!localMediaStream}>
+                        <button
+                            onClick={stopLocalMediaStream}
+                            disabled={!rtcRelatedState.localMediaStream}
+                        >
                             Stop local media stream
                         </button>
                     </div>
@@ -420,7 +507,10 @@ function App() {
                             }}
                         />
                         <br />
-                        <button onClick={stopRemoteMediaStream} disabled={!remoteMediaStream}>
+                        <button
+                            onClick={stopRemoteMediaStream}
+                            disabled={!rtcRelatedState.remoteMediaStream}
+                        >
                             Stop remote media stream
                         </button>
                     </div>
@@ -440,10 +530,10 @@ function App() {
                 ></textarea>
                 <button
                     onClick={() => {
-                        rtcWrapper.ref.dataChannel!.send(message);
-                        setMessage('');
+                        rtcWrapper.dataChannel!.send(message);
 
-                        updateEventsAndRTCHandlers(connectionEvents, [
+                        setMessage('');
+                        updateRtcEvents(rtcRelatedState, [
                             {
                                 content: `Message sent: ${message}`,
                                 isPseudoEvent: true,
@@ -463,7 +553,10 @@ function App() {
 
             <div>
                 <h2>Tear down</h2>
-                <button onClick={closeConnection} disabled={disableCloseConnection}>
+                <button
+                    onClick={() => closeConnection(rtcRelatedState, 'local')}
+                    disabled={disableCloseConnection}
+                >
                     Close connection
                 </button>
                 &emsp;
@@ -474,7 +567,7 @@ function App() {
 
             <div>
                 <h2>Events</h2>
-                {connectionEvents.map((cEvent, index) => (
+                {rtcRelatedState.connectionEvents.map((cEvent, index) => (
                     <p
                         key={`event-${index}`}
                         style={cEvent.isPseudoEvent ? { fontStyle: 'italic' } : undefined}
